@@ -1,0 +1,1444 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>BAZ Tuner + TV Screen (AutoTune)</title>
+  <style>
+    :root{--bg:#0b0f14;--muted:#9fb0c3;--text:#e9f2ff;--accent:#6ae4ff;--ok:#4dff88;--warn:#ffdf6a;--bad:#ff6a6a;}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px;}
+    h1{margin:8px 0 4px;font-size:20px;font-weight:820;letter-spacing:.2px}
+    .sub{color:var(--muted);margin:0 0 14px;font-size:13px;line-height:1.35}
+    .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:12px}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:14px;box-shadow:0 14px 40px rgba(0,0,0,.35)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+    label{font-size:12px;color:var(--muted)}
+    input,button,select,textarea{
+      border-radius:12px;border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.25);color:var(--text);padding:10px 12px;font-size:14px;outline:none;
+    }
+    input::placeholder{color:rgba(159,176,195,.65)}
+    button{cursor:pointer;background:rgba(106,228,255,.10);border-color:rgba(106,228,255,.35)}
+    button:hover{background:rgba(106,228,255,.14)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:6px 10px;font-size:12px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);color:var(--muted)}
+    .pill b{color:var(--text);font-weight:760}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .hr{height:1px;background:rgba(255,255,255,.08);margin:12px 0}
+    .small{font-size:12px;color:var(--muted);line-height:1.45}
+    .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    @media (max-width: 700px){.kpi{grid-template-columns:1fr}}
+    .kpi .box{border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);padding:10px}
+    .kpi .t{font-size:12px;color:var(--muted);margin:0 0 4px}
+    .kpi .v{font-size:15px;font-weight:820;margin:0}
+    canvas{width:100%;height:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18)}
+    .log{height:170px;overflow:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.16);padding:10px;font-size:12px;color:#cfe0ff}
+    .log .dim{color:rgba(233,242,255,.6)}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .chip{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.18);cursor:pointer;user-select:none;font-size:13px}
+    .chip:hover{border-color:rgba(106,228,255,.45);background:rgba(106,228,255,.08)}
+    .chip.active{border-color:rgba(106,228,255,.85);background:rgba(106,228,255,.12)}
+    .chip .x{width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.14);color:rgba(233,242,255,.75);font-size:12px}
+    .chip .x:hover{border-color:rgba(255,106,106,.6);color:rgba(255,106,106,.9)}
+    .hint{color:var(--muted);font-size:12px;margin-top:6px}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BAZ Tuner + TV Screen</h1>
+  <p class="sub">
+    Browser-first: Mic / Tab capture / Audio file. Bridge hooks remain for later Android services.
+    AutoTune picks the best saved channel (or best profile) by a deterministic quality metric.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>Input</label><br/>
+          <select id="inputMode">
+            <option value="mic" selected>Mic / Headset mic</option>
+            <option value="tab">Tab/Screen audio capture</option>
+            <option value="file">Audio file</option>
+            <option value="ip">IP Radio (stream URL)</option>
+            <option value="bridge">PCM Bridge (native)</option>
+          </select>
+          <div class="hint">If “Tab capture” has no audio on your phone, use Mic or Audio file.</div>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="start">Start</button></div>
+        <div><label>&nbsp;</label><br/><button id="stop" disabled>Stop</button></div>
+        <div><label>&nbsp;</label><br/><button id="demoPCM" disabled>Demo PCM</button></div>
+        <div><label>&nbsp;</label><br/><button id="switchMic" disabled>Switch to Mic</button></div>
+        <span class="pill"><b>Status</b> <span id="status">idle</span></span>
+        <span class="pill"><b>Channel</b> <span id="activeCh">—</span></span>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:260px">
+          <label>Audio file</label><br/>
+          <input id="audioFile" type="file" accept="audio/*" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:260px">
+          <label>IP Radio preset</label><br/>
+          <select id="ipPreset" style="width:100%"></select>
+          <div class="hint">Pick a preset or leave on Custom and paste a direct stream URL below (Icecast/Shoutcast .mp3/.aac/.ogg endpoints work best).</div>
+        </div>
+        <div style="flex:2;min-width:260px">
+          <label>Stream URL</label><br/>
+          <input id="ipUrl" type="text" placeholder="https://.../stream.mp3" style="width:100%" />
+          <div class="hint">Some stations block cross‑origin playback in browsers. If it won’t play, it’s the station, not the app.</div>
+        </div>
+        <div>
+          <label>&nbsp;</label><br/>
+          <button id="ipLoad">Load</button>
+        </div>
+      </div>
+
+        </div>
+        <span class="pill"><b>AutoTune</b> <span id="autoState">OFF</span></span>
+        <div><label>&nbsp;</label><br/><button id="autoTuneNow">AutoTune now</button></div>
+        <div>
+          <label for="autoEvery">Auto every (s)</label><br/>
+          <input id="autoEvery" type="number" min="5" step="5" value="30" style="width:120px" />
+        </div>
+        <div><label>&nbsp;</label><br/><button id="autoToggle">Toggle Auto</button></div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div>
+          <label for="freq">Tuner frequency (MHz)</label><br/>
+          <input id="freq" type="number" step="0.1" value="99.5" style="width:140px" />
+        </div>
+        <div>
+          <label for="step">Step (MHz)</label><br/>
+          <select id="step">
+            <option value="0.05">0.05</option>
+            <option value="0.1" selected>0.1</option>
+            <option value="0.2">0.2</option>
+            <option value="0.5">0.5</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="down">−</button></div>
+        <div><label>&nbsp;</label><br/><button id="up">+</button></div>
+        <div>
+          <label for="profile">Enhancer profile</label><br/>
+          <select id="profile">
+            <option value="clean" selected>Clean</option>
+            <option value="voice">Voice</option>
+            <option value="music">Music</option>
+            <option value="weak">Weak signal</option>
+          </select>
+        </div>
+        <span class="pill"><b>Enhance</b> <span id="enhState" class="ok">ON</span></span>
+        <div><label>&nbsp;</label><br/><button id="toggleEnh">Toggle</button></div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div style="flex:1;min-width:240px">
+          <label for="name">Save channel name</label><br/>
+          <input id="name" type="text" placeholder="e.g. City FM" style="width:100%" />
+        </div>
+        <div style="flex:1;min-width:240px">
+          <label for="note">Notes</label><br/>
+          <input id="note" type="text" placeholder="optional" style="width:100%" />
+        </div>
+        <div><label>&nbsp;</label><br/><button id="saveCh">Save</button></div>
+        <div><label>&nbsp;</label><br/><button id="exportCh">Export</button></div>
+        <div>
+          <label>&nbsp;</label><br/>
+          <button id="importCh">Import</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" />
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <label>Channel select buttons</label>
+      <div class="chips" id="chips"></div>
+
+      <div class="hr"></div>
+      <div class="kpi">
+        <div class="box"><p class="t">Input level</p><p class="v mono" id="lvl">—</p></div>
+        <div class="box"><p class="t">Noise estimate</p><p class="v mono" id="noise">—</p></div>
+        <div class="box"><p class="t">Quality</p><p class="v mono" id="qual">—</p></div>
+      </div>
+
+      
+      <div class="hr"></div>
+      <label>Motion sensor (DeviceMotion / Orientation)</label>
+      <div class="hint">
+        Uses browser motion sensors. On some phones this only works on HTTPS / installed PWA (file:// can be blocked).
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>&nbsp;</label><br/><button id="motionEnable">Enable motion</button></div>
+        <div><label>&nbsp;</label><br/><button id="motionDisable" disabled>Disable</button></div>
+        <span class="pill"><b>Motion</b> <span id="motionStatus">off</span></span>
+        <span class="pill"><b>Drive</b> <span id="motionDrive">OFF</span></span>
+        <div><label>&nbsp;</label><br/><button id="motionToggleDrive">Toggle drive</button></div>
+      </div>
+      <div class="kpi" style="margin-top:10px">
+        <div class="box"><p class="t">Accel (m/s²)</p><p class="v mono" id="mAccel">—</p></div>
+        <div class="box"><p class="t">Gyro (°/s)</p><p class="v mono" id="mGyro">—</p></div>
+        <div class="box"><p class="t">Orientation (°)</p><p class="v mono" id="mOri">—</p></div>
+      </div>
+      <div class="hint mono" style="margin-top:8px">
+        “Drive” mode maps tilt → tuner frequency nudges (hands-free scanning). You can turn it off anytime.
+      </div>
+
+<div class="hr"></div>
+      <label>Spectrum</label>
+      <canvas id="spec" width="1100" height="220"></canvas>
+
+      <div class="hr"></div>
+
+      <label>TV Screen (video input)</label>
+      <div class="hint">
+        This is a video “screen”. Use Camera or a video File in the browser.
+        If you later decode RF TV in native code, push frames using the bridge hook below.
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div>
+          <label>TV input mode</label><br/>
+          <select id="tvMode">
+            <option value="camera" selected>Camera</option>
+            <option value="screen">Screen/Tab capture (getDisplayMedia)</option>
+            <option value="file">Video file</option>
+            <option value="bridge">Native video bridge (needs native app)</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="tvStart">Start TV</button></div>
+        <div><label>&nbsp;</label><br/><button id="tvStop" disabled>Stop TV</button></div>
+        <div><label>&nbsp;</label><br/><button id="tvDemo">Demo TV</button></div>
+        <span class="pill"><b>TV</b> <span id="tvStatus">idle</span></span>
+        <div style="min-width:260px">
+          <label>Enhance</label><br/>
+          <select id="tvEnh">
+            <option value="off" selected>Off</option>
+            <option value="temporal">Temporal denoise (pole)</option>
+            <option value="sharp">Sharpen</option>
+            <option value="both">Denoise + Sharpen</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <div>
+          <label for="tvAlpha">Denoise α (0..1)</label><br/>
+          <input id="tvAlpha" type="number" step="0.02" min="0" max="1" value="0.85" style="width:120px" />
+        </div>
+        <div>
+          <label for="tvSharp">Sharpen k (0..2)</label><br/>
+          <input id="tvSharp" type="number" step="0.1" min="0" max="2" value="0.6" style="width:120px" />
+        </div>
+        <div style="flex:1;min-width:260px">
+          <label>Video file</label><br/>
+          <input id="tvFile" type="file" accept="video/*" />
+        </div>
+      </div>
+
+      <canvas id="tvCanvas" width="1100" height="560" style="margin-top:10px"></canvas>
+
+      <div class="hint mono" style="margin-top:8px">
+        Audio bridge: <b>window.__baz_pushPCM(Int16Array samples, sampleRate, channels)</b><br/>
+        TV bridge: <b>window.__baz_pushTVFrame(dataUrl)</b> where <span class="mono">dataUrl</span> is a JPEG/PNG data URL.
+      </div>
+
+      <div class="hr"></div>
+      <label>Log</label>
+      <div class="log mono" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h1 style="font-size:16px;margin-top:0">Why you were stuck on “idle”</h1>
+      <p class="small">
+        If the script crashes, buttons won’t wire up. This build fixes the previous syntax issue.
+        If permissions are blocked (file://), Mic/Camera can also fail. If that happens, try “Audio file” mode first.
+      </p>
+      <div class="hr"></div>
+      <h1 style="font-size:16px;margin-top:0">AutoTune logic</h1>
+      <p class="small">
+        AutoTune measures a quality ratio from the live spectrum (voice+mid energy vs hum+hiss),
+        then selects the best saved channel (or best profile if none saved). Muted during scans.
+      </p>
+      <div class="hr"></div>
+      <h1 style="font-size:16px;margin-top:0">Tip for Android Chrome</h1>
+      <p class="small">
+        Mic/Camera often require HTTPS. If you open this file directly (file://) and permissions fail,
+        use “Audio file” mode to confirm everything works, then run it as an installed PWA or served from localhost/https later.
+      </p>
+    </div>
+  </div>
+</div>
+
+
+<div id="permModal" style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);z-index:9999;padding:18px">
+  <div style="max-width:560px;width:100%;border-radius:16px;border:1px solid rgba(255,255,255,.14);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));box-shadow:0 18px 60px rgba(0,0,0,.45);padding:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div>
+        <div style="font-weight:850;font-size:16px">Choose a browser permission source</div>
+        <div style="color:rgba(233,242,255,.70);font-size:12px;margin-top:4px;line-height:1.4">
+          Browsers can’t directly access your phone’s antenna/RF voltages. The only “general” inputs available are:
+          <b>Camera</b>, <b>Mic</b>, <b>Screen capture</b>, and <b>Files</b>.
+          If you need real RF/TV tuner data, you must use a native Android service and push frames/audio into this page (bridge).
+        </div>
+      </div>
+      <button id="permClose" style="background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)">×</button>
+    </div>
+    <div class="hr"></div>
+    <div class="row">
+      <button id="permCam">Use Camera</button>
+      <button id="permScreen">Use Screen Capture</button>
+      <button id="permMic">Use Mic (audio only)</button>
+    </div>
+    <div class="hint" style="margin-top:8px">
+      Tip: If you’re playing a TV/radio stream in Chrome, “Screen Capture” can grab its video (and sometimes audio).
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id)=>document.getElementById(id);
+  const logEl = $("log");
+  const specCv = $("spec");
+  const sctx = specCv.getContext("2d", {alpha:false});
+
+  // ---- audio state ----
+  let audioCtx = null;
+  let srcNode = null;               // the node feeding the processing graph
+  let analyser = null;
+  let procChain = null;
+  let micStream = null;             // used for mic OR tab capture
+  let fileAudioEl = null;           // audio element when in file mode
+  let masterGain = null;
+  let raf = null;
+  let enhancing = true;
+
+  // ---- autotune ----
+  let autoEnabled = false;
+  let autoTimer = null;
+
+  // ---- channels store ----
+  const STORE_KEY = "baz_tuner_channels_v2";
+  let channels = [];
+  let activeId = null;
+
+  function log(msg, dim=false){
+    const div=document.createElement("div");
+    if(dim) div.className="dim";
+    div.textContent = msg;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setStatus(s){ $("status").textContent = s; }
+  function setActive(name){ $("activeCh").textContent = name || "—"; }
+  function setEnhState(){
+    const el = $("enhState");
+    el.textContent = enhancing ? "ON" : "OFF";
+    el.className = enhancing ? "ok" : "warn";
+  }
+  function setAutoState(){
+    const el = $("autoState");
+    el.textContent = autoEnabled ? "ON" : "OFF";
+    el.className = autoEnabled ? "ok" : "warn";
+  }
+
+  // ---------- filter bank (biquad cascade) ----------
+  function makeBiquad(type, freq, Q, gainDB=0){
+    const node = audioCtx.createBiquadFilter();
+    node.type = type;
+    node.frequency.value = freq;
+    node.Q.value = Q;
+    if(type === "peaking" || type === "lowshelf" || type === "highshelf") node.gain.value = gainDB;
+    return node;
+  }
+
+  function buildChain(profile){
+    if(procChain){
+      try{ procChain.in.disconnect(); }catch{}
+      try{ procChain.out.disconnect(); }catch{}
+    }
+    const input = audioCtx.createGain();
+    const out = audioCtx.createGain();
+
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = -18;
+    comp.knee.value = 18;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.08;
+
+    const notch50 = makeBiquad("notch", 50, 30);
+    const notch60 = makeBiquad("notch", 60, 30);
+    const hp = makeBiquad("highpass", 80, 0.707);
+
+    const hissCut = makeBiquad("highshelf", 9000, 0.707, -6);
+
+    const voiceMid = makeBiquad("peaking", 1600, 1.1, +4);
+    const voiceLP = makeBiquad("lowpass", 4500, 0.707);
+
+    const musicLow = makeBiquad("lowshelf", 120, 0.707, +2);
+    const musicAir = makeBiquad("highshelf", 10000, 0.707, +1);
+    const musicLP = makeBiquad("lowpass", 14000, 0.707);
+
+    const weakLP = makeBiquad("lowpass", 6500, 0.707);
+    const weakHiss = makeBiquad("highshelf", 7000, 0.707, -10);
+    const weakMid = makeBiquad("peaking", 2200, 0.9, +3);
+
+    let last = input;
+    last.connect(notch50); last = notch50;
+    last.connect(notch60); last = notch60;
+    last.connect(hp); last = hp;
+
+    if(profile === "clean"){
+      last.connect(hissCut); last = hissCut;
+      const pres = makeBiquad("peaking", 2800, 1.0, +1.5);
+      last.connect(pres); last = pres;
+      last.connect(musicLP); last = musicLP;
+    } else if(profile === "voice"){
+      last.connect(voiceMid); last = voiceMid;
+      const voiceHP2 = makeBiquad("highpass", 140, 0.707);
+      last.connect(voiceHP2); last = voiceHP2;
+      last.connect(voiceLP); last = voiceLP;
+      const hiss2 = makeBiquad("highshelf", 7000, 0.707, -7);
+      last.connect(hiss2); last = hiss2;
+    } else if(profile === "music"){
+      last.connect(musicLow); last = musicLow;
+      last.connect(hissCut); last = hissCut;
+      last.connect(musicAir); last = musicAir;
+      last.connect(musicLP); last = musicLP;
+    } else { // weak
+      last.connect(weakMid); last = weakMid;
+      last.connect(weakHiss); last = weakHiss;
+      last.connect(weakLP); last = weakLP;
+      const notch150 = makeBiquad("notch", 150, 20);
+      last.connect(notch150); last = notch150;
+    }
+
+    last.connect(comp);
+    comp.connect(out);
+
+    procChain = {in: input, out, comp};
+    return procChain;
+  }
+
+  function connectGraph(inputNode){
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
+
+    if(!masterGain){
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 1.0;
+      masterGain.connect(audioCtx.destination);
+    }
+
+    const chain = buildChain($("profile").value);
+    // source → chain.in
+    inputNode.connect(chain.in);
+
+    if(!enhancing){
+      // bypass: source → analyser → masterGain
+      try{ inputNode.disconnect(); }catch{}
+      const g = audioCtx.createGain();
+      g.gain.value = 1.0;
+      inputNode.connect(g);
+      g.connect(analyser);
+      analyser.connect(masterGain);
+      procChain = {in:g, out:g};
+      return;
+    }
+
+    chain.out.connect(analyser);
+    analyser.connect(masterGain);
+  }
+
+  function rebuildEnhancer(){
+    if(!audioCtx || !srcNode) return;
+    try{ srcNode.disconnect(); }catch{}
+    try{ analyser && analyser.disconnect(); }catch{}
+    try{ procChain && procChain.in && procChain.in.disconnect(); }catch{}
+    try{ procChain && procChain.out && procChain.out.disconnect(); }catch{}
+    connectGraph(srcNode);
+  }
+
+  $("profile").onchange = ()=>{
+    log(`profile -> ${$("profile").value}`, true);
+    rebuildEnhancer();
+    if(activeId){
+      const ch = channels.find(c=>c.id===activeId);
+      if(ch){ ch.profile = $("profile").value; saveStore(); renderChips(); }
+    }
+  };
+
+  $("toggleEnh").onclick = ()=>{
+    enhancing = !enhancing;
+    setEnhState();
+    log(`enhance ${enhancing ? "ON" : "OFF"}`, true);
+    rebuildEnhancer();
+  };
+
+  // ---------- quality metric ----------
+  function computeQuality(){
+    if(!analyser || !audioCtx) return {qDb: NaN, sig:0, noise:0};
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buf);
+
+    const n = buf.length;
+    const sr = audioCtx.sampleRate;
+    const ny = sr/2;
+    const binHz = ny / n;
+
+    function bandEnergy(f0,f1){
+      const a = Math.max(0, Math.floor(f0/binHz));
+      const b = Math.min(n-1, Math.floor(f1/binHz));
+      let s=0;
+      for(let i=a;i<=b;i++){ const x=buf[i]/255; s += x*x; }
+      return s / Math.max(1,(b-a+1));
+    }
+
+    const E_voice = bandEnergy(300, 3400);
+    const E_mid   = bandEnergy(300, 8000);
+    const E_hum   = bandEnergy(40, 120);
+    const E_hiss  = bandEnergy(9000, Math.min(16000, ny-1));
+
+    const noise = 0.6*E_hiss + 0.4*E_hum + 1e-6;
+    const sig = 0.55*E_voice + 0.45*E_mid + 1e-6;
+
+    const q = sig / noise;
+    const qDb = 10*Math.log10(q);
+    return {qDb, sig, noise};
+  }
+
+  async function averageQuality(ms=900){
+    const t0 = performance.now();
+    let acc=0, k=0;
+    while(performance.now()-t0 < ms){
+      const q = computeQuality().qDb;
+      if(Number.isFinite(q)){ acc += q; k++; }
+      await new Promise(r=>setTimeout(r, 80));
+    }
+    return k ? acc/k : NaN;
+  }
+
+  function drawSpectrum(){
+    if(!analyser || !audioCtx) return;
+    const W = specCv.width, H = specCv.height;
+    sctx.fillStyle = "#0b0f14";
+    sctx.fillRect(0,0,W,H);
+
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buf);
+
+    const n = buf.length;
+    const barW = W / n;
+    sctx.fillStyle = "rgba(106,228,255,.65)";
+    for(let i=0;i<n;i++){
+      const v = buf[i] / 255;
+      const h = Math.max(1, v * (H-18));
+      sctx.fillRect(i*barW, H-h, Math.max(1,barW), h);
+    }
+
+    const {qDb, sig, noise} = computeQuality();
+    $("qual").textContent = Number.isFinite(qDb) ? (qDb.toFixed(2)+" dB") : "—";
+    $("noise").textContent = (10*Math.log10(noise+1e-12)).toFixed(2) + " dB (rel)";
+    $("lvl").textContent = (10*Math.log10(sig+1e-12)).toFixed(2) + " dB (rel)";
+
+    sctx.fillStyle = "rgba(233,242,255,.85)";
+    sctx.font = "12px ui-monospace, Menlo, Consolas, monospace";
+    if(Number.isFinite(qDb)) sctx.fillText(`quality≈${qDb.toFixed(2)} dB`, 10, 14);
+
+    raf = requestAnimationFrame(drawSpectrum);
+  }
+
+  // ---------- channels persistence ----------
+  function uuid(){ return Math.random().toString(16).slice(2)+Math.random().toString(16).slice(2); }
+  function saveStore(){ localStorage.setItem(STORE_KEY, JSON.stringify(channels)); }
+  function loadStore(){
+    try{ const t = localStorage.getItem(STORE_KEY); if(t) channels = JSON.parse(t) || []; }
+    catch{ channels = []; }
+  }
+
+  function renderChips(){
+    const box = $("chips");
+    box.innerHTML = "";
+    if(channels.length === 0){
+      const d=document.createElement("div");
+      d.className="small";
+      d.textContent="No channels saved yet.";
+      box.appendChild(d);
+      return;
+    }
+    for(const ch of channels){
+      const chip = document.createElement("div");
+      chip.className = "chip" + (ch.id===activeId ? " active" : "");
+      chip.title = ch.note || "";
+      const label = document.createElement("span");
+      label.textContent = `${ch.name} (${Number(ch.freq).toFixed(1)} MHz • ${ch.profile})`;
+      const x = document.createElement("span");
+      x.className = "x";
+      x.textContent = "×";
+
+      x.onclick = (ev)=>{
+        ev.stopPropagation();
+        channels = channels.filter(c=>c.id!==ch.id);
+        if(activeId===ch.id){ activeId=null; setActive("—"); }
+        saveStore(); renderChips();
+        log(`deleted channel: ${ch.name}`, true);
+      };
+
+      chip.onclick = ()=>{
+        activeId = ch.id;
+        $("freq").value = String(ch.freq);
+        $("profile").value = ch.profile || "clean";
+        $("name").value = ch.name || "";
+        $("note").value = ch.note || "";
+        setActive(ch.name);
+        renderChips();
+        log(`selected channel: ${ch.name} @ ${ch.freq} MHz`, true);
+        rebuildEnhancer();
+      };
+
+      chip.appendChild(label);
+      chip.appendChild(x);
+      box.appendChild(chip);
+    }
+  }
+
+  $("saveCh").onclick = ()=>{
+    const name = ($("name").value||"").trim();
+    if(!name){ log("name required to save channel"); return; }
+    const freq = Number($("freq").value||0);
+    const note = ($("note").value||"").trim();
+    const profile = $("profile").value;
+
+    let ch = channels.find(c => c.id===activeId);
+    if(!ch){
+      ch = {id: uuid(), name, freq, note, profile, created: new Date().toISOString()};
+      channels.unshift(ch);
+      activeId = ch.id;
+    } else {
+      ch.name=name; ch.freq=freq; ch.note=note; ch.profile=profile;
+    }
+    saveStore();
+    setActive(name);
+    renderChips();
+    log(`saved channel: ${name} @ ${freq.toFixed(1)} MHz (${profile})`, true);
+  };
+
+  $("exportCh").onclick = ()=>{
+    const payload = { created: new Date().toISOString(), channels };
+    const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "baz_tuner_channels.json";
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1500);
+  };
+
+  $("importCh").onclick = ()=> $("importFile").click();
+  $("importFile").onchange = async (ev)=>{
+    const f = ev.target.files && ev.target.files[0];
+    if(!f) return;
+    try{
+      const obj = JSON.parse(await f.text());
+      if(Array.isArray(obj.channels)){
+        const map = new Map(channels.map(c=>[c.id,c]));
+        for(const c of obj.channels){ if(c && c.id) map.set(c.id, c); }
+        channels = Array.from(map.values());
+        saveStore(); renderChips();
+        log(`imported ${obj.channels.length} channels`, true);
+      } else log("import JSON missing channels[]");
+    }catch(e){
+      log("import failed: " + (e.message||String(e)));
+    } finally { ev.target.value=""; }
+  };
+
+  $("up").onclick = ()=>{
+    const step = Number($("step").value||0.1);
+    $("freq").value = (Number($("freq").value||0)+step).toFixed(2);
+  };
+  $("down").onclick = ()=>{
+    const step = Number($("step").value||0.1);
+    $("freq").value = (Number($("freq").value||0)-step).toFixed(2);
+  };
+
+  // ---------- bridge audio ----------
+  const bridge = {
+    sr: 48000,
+    buffer: new Float32Array(0),
+    writePos: 0, readPos: 0, capacity: 0,
+    node: null,
+    ensure(cap){
+      if(this.capacity >= cap) return;
+      this.capacity = cap;
+      this.buffer = new Float32Array(cap);
+      this.writePos = 0; this.readPos = 0;
+    },
+    write(samplesF32){
+      const n = samplesF32.length;
+      if(n > this.capacity) this.ensure(n*2);
+      for(let i=0;i<n;i++){
+        this.buffer[this.writePos] = samplesF32[i];
+        this.writePos = (this.writePos + 1) % this.capacity;
+        if(this.writePos === this.readPos) this.readPos = (this.readPos + 1) % this.capacity;
+      }
+    },
+    read(out){
+      const n = out.length;
+      for(let i=0;i<n;i++){
+        if(this.readPos === this.writePos) out[i]=0;
+        else { out[i]=this.buffer[this.readPos]; this.readPos=(this.readPos+1)%this.capacity; }
+      }
+    }
+  };
+
+  let lastPCM = 0;
+  function nowMs(){ return performance.now(); }
+
+  window.__baz_pushPCM = (int16Samples, sampleRate, channelsCount)=>{
+    if(!audioCtx) return;
+    lastPCM = nowMs();
+    const n = int16Samples.length;
+    const f = new Float32Array(n);
+    for(let i=0;i<n;i++) f[i] = int16Samples[i] / 32768;
+    bridge.sr = sampleRate || bridge.sr;
+    bridge.ensure(Math.max(bridge.capacity, bridge.sr*2));
+    bridge.write(f);
+  };
+
+  function startBridge(){
+    const sp = audioCtx.createScriptProcessor(2048, 0, 1);
+    const g = audioCtx.createGain();
+    g.gain.value = 1.0;
+    sp.onaudioprocess = (ev)=>{
+      const ch0 = ev.outputBuffer.getChannelData(0);
+      bridge.read(ch0);
+    };
+    sp.connect(g);
+    srcNode = g;
+    connectGraph(srcNode);
+    bridge.node = sp;
+    lastPCM = nowMs();
+  }
+
+  function synthPCM(freqHz=440, seconds=2, sampleRate=48000){
+    const N = Math.floor(seconds*sampleRate);
+    const a = new Int16Array(N);
+    const w = 2*Math.PI*freqHz/sampleRate;
+    for(let i=0;i<N;i++){
+      const s = Math.sin(w*i) * 0.25;
+      a[i] = (s * 32767) | 0;
+    }
+    return a;
+  }
+
+  $("demoPCM").onclick = ()=>{
+    const sr = audioCtx ? audioCtx.sampleRate : 48000;
+    const pcm = synthPCM(440, 2, sr);
+    window.__baz_pushPCM(pcm, sr, 1);
+    log("demo PCM pushed (440 Hz, 2s)", true);
+  };
+
+  let bridgeWatch = null;
+  function startBridgeWatchdog(){
+    if(bridgeWatch) clearInterval(bridgeWatch);
+    bridgeWatch = setInterval(()=>{
+      if(!audioCtx) return;
+      if($("inputMode").value !== "bridge") return;
+      const dt = nowMs() - lastPCM;
+      if(dt > 1600) setStatus("bridge: no PCM (use Mic/Tab/File or push PCM)");
+      else setStatus("running");
+    }, 700);
+  }
+
+  // ---------- browser inputs ----------
+  async function startMic(){
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    });
+    srcNode = audioCtx.createMediaStreamSource(micStream);
+    connectGraph(srcNode);
+  }
+
+  async function startTabCapture(){
+    // user chooses a surface; request audio+video (video is required by some UAs for capture picker)
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:true });
+    micStream = stream;
+    srcNode = audioCtx.createMediaStreamSource(stream);
+    connectGraph(srcNode);
+  }
+
+  async function startAudioFile(){
+    const f = $("audioFile").files && $("audioFile").files[0];
+    if(!f) throw new Error("Select an audio file first.");
+    const url = URL.createObjectURL(f);
+    const el = document.createElement("audio");
+    el.src = url;
+    el.loop = true;
+    el.crossOrigin = "anonymous";
+    await el.play();
+    fileAudioEl = el;
+    srcNode = audioCtx.createMediaElementSource(el);
+    connectGraph(srcNode);
+  }
+  // ---------- IP Radio (stream URL) ----------
+  const IP_PRESETS = [
+    { group:"SomaFM", name:"Groove Salad (MP3 128)", url:"https://ice5.somafm.com/groovesalad-128-mp3" },
+    { group:"SomaFM", name:"Drone Zone (MP3 128)", url:"https://ice5.somafm.com/dronezone-128-mp3" },
+    { group:"SomaFM", name:"Space Station Soma (MP3 128)", url:"https://ice5.somafm.com/spacestation-128-mp3" },
+    { group:"Radio Paradise", name:"Main Mix (MP3 128)", url:"https://stream.radioparadise.com/mp3-128" }
+  ];
+
+  function populateIpPresets(){
+    const sel = $("ipPreset");
+    if(!sel) return;
+    sel.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value="__custom__";
+    opt0.textContent="Custom (paste URL)";
+    sel.appendChild(opt0);
+
+    let lastGroup = null;
+    let currentGroup = null;
+
+    for(const p of IP_PRESETS){
+      if(p.group !== lastGroup){
+        currentGroup = document.createElement("optgroup");
+        currentGroup.label = p.group;
+        sel.appendChild(currentGroup);
+        lastGroup = p.group;
+      }
+      const o = document.createElement("option");
+      o.value = p.url;
+      o.textContent = p.name;
+      currentGroup.appendChild(o);
+    }
+  }
+
+  async function startIpRadio(){
+    const url = ($("ipUrl").value||"").trim();
+    if(!url) throw new Error("Paste a stream URL first.");
+    const el = document.createElement("audio");
+    el.src = url;
+    el.crossOrigin = "anonymous";
+    el.autoplay = true;
+    el.preload = "none";
+    el.loop = true;
+    el.playsInline = true;
+
+    await el.play();
+    fileAudioEl = el;
+    srcNode = audioCtx.createMediaElementSource(el);
+    connectGraph(srcNode);
+  }
+
+
+
+  // ---------- start/stop ----------
+  async function start(){
+    if(audioCtx) return;
+    setStatus("starting…");
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({latencyHint:"interactive"});
+    log(`AudioContext sampleRate=${audioCtx.sampleRate}`, true);
+
+    const mode = $("inputMode").value;
+    $("switchMic").disabled = false;
+
+    if(mode === "mic"){
+      await startMic();
+      log("input: mic", true);
+      $("demoPCM").disabled = true;
+    } else if(mode === "tab"){
+      await startTabCapture();
+      log("input: tab/screen capture", true);
+      $("demoPCM").disabled = true;
+    } else if(mode === "file"){
+      await startAudioFile();
+      log("input: audio file", true);
+      $("demoPCM").disabled = true;
+    } else if(mode === "ip"){
+      await startIpRadio();
+      log("input: IP radio stream", true);
+      $("demoPCM").disabled = true;
+    } else {
+      startBridge();
+      log("input: bridge (waiting for PCM push)", true);
+      $("demoPCM").disabled = false;
+      startBridgeWatchdog();
+    }
+
+    $("start").disabled = true;
+    $("stop").disabled = false;
+    setStatus("running");
+    setEnhState();
+    setAutoState();
+    raf = requestAnimationFrame(drawSpectrum);
+  }
+
+  async function stop(){
+    try{ if(raf) cancelAnimationFrame(raf); }catch{}
+    raf = null;
+
+    if(autoTimer) { try{ clearInterval(autoTimer); }catch{} autoTimer=null; }
+    if(bridgeWatch){ try{ clearInterval(bridgeWatch); }catch{} bridgeWatch=null; }
+
+    try{ analyser && analyser.disconnect(); }catch{}
+    try{ srcNode && srcNode.disconnect(); }catch{}
+    try{ procChain && procChain.in && procChain.in.disconnect(); }catch{}
+    try{ procChain && procChain.out && procChain.out.disconnect(); }catch{}
+    try{ bridge.node && bridge.node.disconnect(); }catch{}
+
+    try{ micStream && micStream.getTracks().forEach(t=>t.stop()); }catch{}
+    micStream = null;
+
+    if(fileAudioEl){
+      try{ fileAudioEl.pause(); }catch{}
+      fileAudioEl = null;
+    }
+
+    if(audioCtx){
+      try{ await audioCtx.close(); }catch{}
+    }
+    audioCtx = null;
+    analyser = null;
+    srcNode = null;
+    procChain = null;
+    masterGain = null;
+
+    $("start").disabled = false;
+    $("stop").disabled = true;
+    $("demoPCM").disabled = true;
+    $("switchMic").disabled = true;
+    setStatus("idle");
+    log("stopped", true);
+  }
+
+  $("start").onclick = async ()=>{
+    try{ await start(); }
+    catch(e){
+      log("start failed: " + (e.message||String(e)));
+      setStatus("error");
+      await stop();
+    }
+  };
+  $("stop").onclick = stop;
+
+  $("switchMic").onclick = async ()=>{
+    try{
+      await stop();
+      $("inputMode").value = "mic";
+      await start();
+      log("switched to mic", true);
+    }catch(e){
+      log("switchMic failed: " + (e.message||String(e)));
+    }
+  };
+
+  // ---------- AutoTune ----------
+  async function autoTuneOnce(){
+    if(!audioCtx || !analyser){
+      log("AutoTune: start input first.", true);
+      return;
+    }
+    const prevGain = masterGain ? masterGain.gain.value : 1.0;
+    if(masterGain) masterGain.gain.value = 0.0; // mute scan
+
+    if(channels.length === 0){
+      const profiles = ["clean","voice","music","weak"];
+      const prevProf = $("profile").value;
+      let best = {p: prevProf, q: -1e9};
+      for(const p of profiles){
+        $("profile").value = p;
+        rebuildEnhancer();
+        await new Promise(r=>setTimeout(r, 220));
+        const q = await averageQuality(650);
+        log(`AutoTune profile ${p}: ${q.toFixed(2)} dB`, true);
+        if(Number.isFinite(q) && q > best.q) best = {p, q};
+      }
+      $("profile").value = best.p;
+      rebuildEnhancer();
+      if(masterGain) masterGain.gain.value = prevGain;
+      log(`AutoTune picked profile: ${best.p} (≈${best.q.toFixed(2)} dB)`, true);
+      return;
+    }
+
+    const prevId = activeId;
+    const prevFreq = $("freq").value;
+    const prevProf = $("profile").value;
+
+    let best = {id:null, q:-1e9};
+    for(const ch of channels){
+      activeId = ch.id;
+      $("freq").value = String(ch.freq);
+      $("profile").value = ch.profile || "clean";
+      rebuildEnhancer();
+      await new Promise(r=>setTimeout(r, 250));
+      const q = await averageQuality(750);
+      log(`AutoTune ${ch.name}: ${q.toFixed(2)} dB`, true);
+      if(Number.isFinite(q) && q > best.q) best = {id: ch.id, q};
+    }
+
+    const chBest = channels.find(c=>c.id===best.id);
+    if(chBest){
+      activeId = chBest.id;
+      $("freq").value = String(chBest.freq);
+      $("profile").value = chBest.profile || "clean";
+      $("name").value = chBest.name || "";
+      $("note").value = chBest.note || "";
+      setActive(chBest.name);
+      renderChips();
+      rebuildEnhancer();
+      log(`AutoTune selected: ${chBest.name} (≈${best.q.toFixed(2)} dB)`, true);
+    } else {
+      activeId = prevId;
+      $("freq").value = prevFreq;
+      $("profile").value = prevProf;
+      rebuildEnhancer();
+      log("AutoTune: no best found; restored.", true);
+    }
+
+    if(masterGain) masterGain.gain.value = prevGain;
+  }
+
+  function scheduleAuto(){
+    if(autoTimer) clearInterval(autoTimer);
+    autoTimer = null;
+    if(!autoEnabled) return;
+    const every = Math.max(5, Math.floor(Number($("autoEvery").value || 30)));
+    autoTimer = setInterval(()=>{
+      if(!audioCtx) return;
+      autoTuneOnce().catch(e=>log("AutoTune error: " + (e.message||String(e))));
+    }, every*1000);
+  }
+
+  $("autoTuneNow").onclick = ()=> autoTuneOnce().catch(e=>log("AutoTune error: " + (e.message||String(e))));
+  $("autoToggle").onclick = ()=>{
+    autoEnabled = !autoEnabled;
+    setAutoState();
+    scheduleAuto();
+    log("AutoTune " + (autoEnabled ? "ON" : "OFF"), true);
+  };
+
+  
+  // ---------- Permission modal (browser-general inputs) ----------
+  const permModal = $("permModal");
+  function openPermModal(){ permModal.style.display="flex"; }
+  function closePermModal(){ permModal.style.display="none"; }
+  $("permClose").onclick = closePermModal;
+  permModal.addEventListener("click",(e)=>{ if(e.target===permModal) closePermModal(); });
+
+  async function tvStartScreenCapture(){
+    // Screen/Tab capture for video (and maybe audio depending on UA)
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+    const v = document.createElement("video");
+    v.srcObject = stream;
+    v.muted = true;
+    v.playsInline = true;
+    await v.play();
+    tv.stream = stream;
+    tv.video = v;
+    tv.back = null;
+    tvSetStatus("running (screen capture)");
+    tvDrawLoop();
+  }
+
+  // ---------- TV module ----------
+  const tv = {
+    stream: null,
+    video: null,
+    img: null,
+    raf: null,
+    demoTimer: null,
+    lastFrameTs: 0,
+    canvas: $("tvCanvas"),
+    ctx: $("tvCanvas").getContext("2d", {alpha:false}),
+    back: null
+  };
+
+  function tvSetStatus(s){ $("tvStatus").textContent = s; }
+  function tvEnsureImage(){
+    if(!tv.img) tv.img = new Image();
+    tv.img.onload = ()=>{
+      const W = tv.canvas.width, H = tv.canvas.height;
+      tv.ctx.drawImage(tv.img, 0, 0, W, H);
+      tvApplyEnhancement();
+      tv.lastFrameTs = performance.now();
+      tvSetStatus("running (bridge)");
+    };
+  }
+
+  function tvStopDemo(){
+    if(tv.demoTimer){ try{ clearInterval(tv.demoTimer); }catch{} }
+    tv.demoTimer = null;
+  }
+
+  function tvStartDemo(){
+    // Generates a synthetic “TV” feed and pushes it through the same bridge path.
+    tvStopDemo();
+    tvEnsureImage();
+    const tmp = document.createElement("canvas");
+    tmp.width = 640; tmp.height = 360;
+    const c = tmp.getContext("2d");
+    let t = 0;
+    tvSetStatus("demo (synthetic feed)");
+    tv.demoTimer = setInterval(()=>{
+      t += 1;
+      // color bars
+      const bars = ["#ffffff","#ffff00","#00ffff","#00ff00","#ff00ff","#ff0000","#0000ff","#000000"];
+      const w = tmp.width / bars.length;
+      for(let i=0;i<bars.length;i++){
+        c.fillStyle = bars[i];
+        c.fillRect(i*w, 0, w, tmp.height*0.65);
+      }
+      // moving gradient noise strip
+      const y0 = tmp.height*0.65;
+      const img = c.getImageData(0, y0, tmp.width, tmp.height-y0);
+      const d = img.data;
+      for(let i=0;i<d.length;i+=4){
+        const x = ((i/4) % tmp.width) | 0;
+        const y = ((i/4/tmp.width) | 0);
+        const v = (Math.sin((x*0.05)+(t*0.12)) + Math.cos((y*0.07)-(t*0.09))) * 50 + 128;
+        d[i]=v; d[i+1]=(v+30)%255; d[i+2]=(v+90)%255; d[i+3]=255;
+      }
+      c.putImageData(img, 0, y0);
+
+      // overlay text and “signal” indicator
+      c.fillStyle = "rgba(0,0,0,.45)";
+      c.fillRect(10, 10, 330, 58);
+      c.fillStyle = "#e9f2ff";
+      c.font = "20px ui-monospace, Menlo, Consolas, monospace";
+      c.fillText("BAZ TV DEMO", 20, 38);
+      c.font = "14px ui-monospace, Menlo, Consolas, monospace";
+      c.fillText(`t=${t}  enh=${$("tvEnh").value}`, 20, 58);
+
+      // a fake “channel” label from tuner frequency
+      c.fillStyle = "rgba(0,0,0,.45)";
+      c.fillRect(tmp.width-230, 10, 220, 58);
+      c.fillStyle = "#6ae4ff";
+      c.font = "18px ui-monospace, Menlo, Consolas, monospace";
+      c.fillText(`CH ${Number($("freq").value||0).toFixed(1)}`, tmp.width-220, 40);
+
+      const url = tmp.toDataURL("image/jpeg", 0.75);
+      window.__baz_pushTVFrame(url);
+    }, 80);
+  }
+
+  function tvStartBridgeWatchdog(){
+    // Only meaningful in bridge mode: shows “no frames” if nothing arrives
+    setInterval(()=>{
+      if($("tvMode").value !== "bridge") return;
+      if($("tvStatus").textContent.startsWith("idle")) return;
+      const dt = performance.now() - tv.lastFrameTs;
+      if(dt > 1500 && !$("tvStatus").textContent.includes("waiting")){
+        tvSetStatus("bridge: no frames (use Demo TV or push frames)");
+      }
+    }, 700);
+  }
+
+
+  function tvApplyEnhancement(){
+    const mode = $("tvEnh").value;
+    if(mode === "off") return;
+
+    const W = tv.canvas.width, H = tv.canvas.height;
+    const img = tv.ctx.getImageData(0,0,W,H);
+    const data = img.data;
+
+    const doTemporal = (mode === "temporal" || mode === "both");
+    const doSharp = (mode === "sharp" || mode === "both");
+
+    if(doTemporal){
+      const alpha = Math.max(0, Math.min(1, Number($("tvAlpha").value||0.85)));
+      if(!tv.back || tv.back.data.length !== data.length){
+        tv.back = new ImageData(new Uint8ClampedArray(data), W, H);
+      } else {
+        const b = tv.back.data;
+        const a = alpha, ia = 1-a;
+        for(let i=0;i<data.length;i+=4){
+          b[i]   = (a*b[i]   + ia*data[i])   | 0;
+          b[i+1] = (a*b[i+1] + ia*data[i+1]) | 0;
+          b[i+2] = (a*b[i+2] + ia*data[i+2]) | 0;
+          b[i+3] = 255;
+        }
+        data.set(b);
+      }
+    }
+
+    if(doSharp){
+      const k = Math.max(0, Math.min(2, Number($("tvSharp").value||0.6)));
+      const copy = new Uint8ClampedArray(data);
+      const w4 = W*4;
+      for(let y=1;y<H-1;y++){
+        for(let x=1;x<W-1;x++){
+          const p = y*w4 + x*4;
+          for(let c=0;c<3;c++){
+            const s =
+              copy[p + c] +
+              copy[p-4 + c] + copy[p+4 + c] +
+              copy[p-w4 + c] + copy[p+w4 + c] +
+              copy[p-w4-4 + c] + copy[p-w4+4 + c] +
+              copy[p+w4-4 + c] + copy[p+w4+4 + c];
+            const blur = s / 9;
+            const v = copy[p+c] + k*(copy[p+c] - blur);
+            data[p+c] = v < 0 ? 0 : (v > 255 ? 255 : v);
+          }
+        }
+      }
+    }
+
+    tv.ctx.putImageData(img, 0, 0);
+  }
+
+  function tvDrawLoop(){
+    if(!tv.video) return;
+    const W = tv.canvas.width, H = tv.canvas.height;
+    tv.ctx.drawImage(tv.video, 0, 0, W, H);
+    tvApplyEnhancement();
+    tv.raf = requestAnimationFrame(tvDrawLoop);
+  }
+
+  async function tvStart(){
+    const mode = $("tvMode").value;
+    tvSetStatus("starting…");
+    $("tvStart").disabled = true;
+    $("tvStop").disabled = false;
+    tv.back = null;
+
+    if(mode === "screen"){
+      const stream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:false});
+      tv.stream = stream;
+      const v = document.createElement("video");
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      await v.play();
+      tv.video = v;
+      tvSetStatus("running (screen capture)");
+      tvDrawLoop();
+      return;
+    }
+
+    if(mode === "file"){
+      const f = $("tvFile").files && $("tvFile").files[0];
+      if(!f){ tvSetStatus("select file"); $("tvStart").disabled=false; $("tvStop").disabled=true; return; }
+      const url = URL.createObjectURL(f);
+      const v = document.createElement("video");
+      v.src = url;
+      v.muted = true;
+      v.loop = true;
+      v.playsInline = true;
+      await v.play();
+      tv.video = v;
+      tvSetStatus("running (file)");
+      tvDrawLoop();
+      return;
+    }
+
+    if(mode === "camera"){
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}, audio:false});
+      tv.stream = stream;
+      const v = document.createElement("video");
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      await v.play();
+      tv.video = v;
+      tvSetStatus("running (camera)");
+      tvDrawLoop();
+      return;
+    }    // bridge
+    tvStopDemo();
+    tvEnsureImage();
+    tvSetStatus("bridge: waiting for frames (native bridge required)");
+    // Browser cannot request “antenna/TV service” permissions; offer real browser sources instead.
+    openPermModal();
+  }
+
+  function tvStop(){
+    tvStopDemo();
+    try{ if(tv.raf) cancelAnimationFrame(tv.raf); }catch{}
+    tv.raf = null;
+    if(tv.stream){
+      try{ tv.stream.getTracks().forEach(t=>t.stop()); }catch{}
+    }
+    tv.stream = null;
+    tv.video = null;
+    tv.back = null;
+    $("tvStart").disabled = false;
+    $("tvStop").disabled = true;
+    tvSetStatus("idle");
+  }
+
+  $("tvStart").onclick = ()=> tvStart().catch(e=>{
+    tvSetStatus("error: " + (e.message||String(e)));
+    $("tvStart").disabled = false;
+    $("tvStop").disabled = true;
+  });
+  $("tvStop").onclick = tvStop;
+  
+  // Modal actions (route user to real browser sources)
+  $("permCam").onclick = ()=>{ closePermModal(); $("tvMode").value="camera"; $("tvStart").click(); };
+  $("permScreen").onclick = ()=>{ closePermModal(); $("tvMode").value="screen"; $("tvStart").click(); };
+  $("permMic").onclick = async ()=>{
+    closePermModal();
+    // Start audio side with mic; TV stays whatever it is.
+    try{
+      $("inputMode").value = "mic";
+      if(!$("start").disabled) await start();
+      else log("audio already running; switch input manually if needed.", true);
+    }catch(e){ log("mic start failed: "+(e.message||String(e))); }
+  };
+
+$("tvDemo").onclick = ()=>{
+    // If user wants demo, force bridge mode visuals (no permissions needed)
+    $("tvMode").value = "bridge";
+    $("tvStart").disabled = true;
+    $("tvStop").disabled = false;
+    tvStartDemo();
+  };
+
+
+  window.__baz_pushTVFrame = (dataUrl)=>{
+    if(!dataUrl) return;
+    tvEnsureImage();
+    tv.img.src = dataUrl;
+  };
+
+  // ---------- init ----------
+  loadStore();
+  renderChips();
+  setEnhState();
+  setAutoState();
+  tvStartBridgeWatchdog();
+  populateIpPresets();
+  $("ipPreset").onchange = ()=>{
+    const v = $("ipPreset").value;
+    if(v && v !== "__custom__") $("ipUrl").value = v;
+  };
+  $("ipLoad").onclick = async ()=>{
+    try{
+      $("inputMode").value = "ip";
+      // Restart clean so autoplay gesture is tied to this click
+      if(audioCtx) await stop();
+      await start();
+    }catch(e){ log("IP load failed: " + (e.message||String(e))); }
+  };
+
+  // ---------- Motion sensor ----------
+  let motionOn = false;
+  let motionDrive = false;
+  let lastTilt = {beta:0, gamma:0};
+  let driveTimer = null;
+
+  function setMotionStatus(s){
+    $("motionStatus").textContent = s;
+  }
+  function setMotionDrive(){
+    $("motionDrive").textContent = motionDrive ? "ON" : "OFF";
+    $("motionDrive").className = motionDrive ? "ok" : "warn";
+  }
+
+  function fmt3(a,b,c){
+    const f = (x)=> Number.isFinite(x) ? x.toFixed(2) : "—";
+    return `${f(a)}, ${f(b)}, ${f(c)}`;
+  }
+
+  function onDeviceMotion(ev){
+    const a = ev.accelerationIncludingGravity || ev.acceleration || {};
+    const r = ev.rotationRate || {};
+    $("mAccel").textContent = fmt3(a.x, a.y, a.z);
+    // rotationRate alpha/beta/gamma are deg/s on many devices
+    $("mGyro").textContent = fmt3(r.alpha, r.beta, r.gamma);
+  }
+
+  function onOrientation(ev){
+    // beta: front-back tilt, gamma: left-right tilt
+    const alpha = ev.alpha, beta = ev.beta, gamma = ev.gamma;
+    lastTilt = {beta: Number(beta)||0, gamma: Number(gamma)||0};
+    const f = (x)=> Number.isFinite(x) ? x.toFixed(1) : "—";
+    $("mOri").textContent = `${f(alpha)} / ${f(beta)} / ${f(gamma)}`;
+  }
+
+  async function enableMotion(){
+    if(motionOn) return;
+    // iOS-style permission gate (Android usually doesn't need it)
+    try{
+      if(typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
+        const res = await DeviceMotionEvent.requestPermission();
+        if(res !== "granted") throw new Error("motion permission denied");
+      }
+      if(typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function"){
+        const res2 = await DeviceOrientationEvent.requestPermission();
+        if(res2 !== "granted") throw new Error("orientation permission denied");
+      }
+    }catch(e){
+      log("motion permission error: " + (e.message||String(e)));
+      // keep going; maybe Android path
+    }
+
+    window.addEventListener("devicemotion", onDeviceMotion, {passive:true});
+    window.addEventListener("deviceorientation", onOrientation, {passive:true});
+    motionOn = true;
+    setMotionStatus("on");
+    $("motionEnable").disabled = true;
+    $("motionDisable").disabled = false;
+  }
+
+  function disableMotion(){
+    if(!motionOn) return;
+    window.removeEventListener("devicemotion", onDeviceMotion);
+    window.removeEventListener("deviceorientation", onOrientation);
+    motionOn = false;
+    setMotionStatus("off");
+    $("motionEnable").disabled = false;
+    $("motionDisable").disabled = true;
+    motionDrive = false;
+    setMotionDrive();
+    if(driveTimer){ clearInterval(driveTimer); driveTimer=null; }
+  }
+
+  function startDriveLoop(){
+    if(driveTimer) clearInterval(driveTimer);
+    driveTimer = setInterval(()=>{
+      if(!motionDrive) return;
+      // Map tilt gamma (-45..45) to small freq nudges
+      const g = Math.max(-45, Math.min(45, lastTilt.gamma || 0));
+      const b = Math.max(-45, Math.min(45, lastTilt.beta || 0));
+      const step = Number($("step").value||0.1);
+      // Left-right tilt nudges frequency; forward tilt changes profile
+      const delta = (g/45) * step * 0.6;
+      const f = Number($("freq").value||0);
+      if(Number.isFinite(f)){
+        $("freq").value = (f + delta).toFixed(2);
+      }
+      // Forward tilt: pick voice when upright-ish, music when leaned back
+      if(b > 18) $("profile").value = "voice";
+      else if(b < -18) $("profile").value = "music";
+      // Apply
+      rebuildEnhancer();
+    }, 200);
+  }
+
+  $("motionEnable").onclick = ()=> enableMotion().catch(e=>log("motion enable failed: "+(e.message||String(e))));
+  $("motionDisable").onclick = disableMotion;
+  $("motionToggleDrive").onclick = ()=>{ motionDrive = !motionDrive; setMotionDrive(); if(motionDrive){ enableMotion().then(startDriveLoop); } };
+  setMotionDrive();
+
+  log("ready.", true);
+})();
+</script>
+</body>
+</html>

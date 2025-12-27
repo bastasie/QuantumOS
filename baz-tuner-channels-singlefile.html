@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>BAZ Tuner — Channel Presets + GLT Pole-Bank Audio Enhancer</title>
+  <style>
+    :root{--bg:#0b0f14;--muted:#9fb0c3;--text:#e9f2ff;--accent:#6ae4ff;--ok:#4dff88;--warn:#ffdf6a;--bad:#ff6a6a;}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px;}
+    h1{margin:8px 0 4px;font-size:20px;font-weight:820;letter-spacing:.2px}
+    .sub{color:var(--muted);margin:0 0 14px;font-size:13px;line-height:1.35}
+    .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:12px}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:14px;box-shadow:0 14px 40px rgba(0,0,0,.35)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+    label{font-size:12px;color:var(--muted)}
+    input,button,select,textarea{
+      border-radius:12px;border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.25);color:var(--text);padding:10px 12px;font-size:14px;outline:none;
+    }
+    input::placeholder,textarea::placeholder{color:rgba(159,176,195,.65)}
+    button{cursor:pointer;background:rgba(106,228,255,.10);border-color:rgba(106,228,255,.35)}
+    button:hover{background:rgba(106,228,255,.14)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:6px 10px;font-size:12px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);color:var(--muted)}
+    .pill b{color:var(--text);font-weight:760}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .hr{height:1px;background:rgba(255,255,255,.08);margin:12px 0}
+    .small{font-size:12px;color:var(--muted);line-height:1.45}
+    .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    @media (max-width: 700px){.kpi{grid-template-columns:1fr}}
+    .kpi .box{border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);padding:10px}
+    .kpi .t{font-size:12px;color:var(--muted);margin:0 0 4px}
+    .kpi .v{font-size:15px;font-weight:820;margin:0}
+    canvas{width:100%;height:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18)}
+    .log{height:160px;overflow:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.16);padding:10px;font-size:12px;color:#cfe0ff}
+    .log .dim{color:rgba(233,242,255,.6)}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .chip{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:8px 10px;border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.18);
+      cursor:pointer; user-select:none;
+      font-size:13px;
+    }
+    .chip:hover{border-color:rgba(106,228,255,.45);background:rgba(106,228,255,.08)}
+    .chip.active{border-color:rgba(106,228,255,.85);background:rgba(106,228,255,.12)}
+    .chip .x{
+      width:18px;height:18px;border-radius:999px;
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid rgba(255,255,255,.14);
+      color:rgba(233,242,255,.75);
+      font-size:12px;
+    }
+    .chip .x:hover{border-color:rgba(255,106,106,.6);color:rgba(255,106,106,.9)}
+    .hint{color:var(--muted);font-size:12px;margin-top:6px}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BAZ Tuner — Channel Presets</h1>
+  <p class="sub">
+    Single-file tuner UI with saved channels + one-tap channel buttons.
+    The “tuning” is represented as a frequency + a deterministic GLT-style pole-bank enhancement profile applied to the audio stream you capture.
+    Works with microphone input in Chrome. If you later provide an Android native bridge for PlaybackCapture PCM, this UI can consume it too (hook inside).
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>Input</label><br/>
+          <select id="inputMode">
+            <option value="mic" selected>Mic / Headset Mic (WebAudio)</option>
+            <option value="bridge">Native PCM Bridge (Android service)</option>
+          </select>
+          <div class="hint">Bridge mode expects your native layer to push PCM into this page.</div>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="start">Start</button></div>
+        <div><label>&nbsp;</label><br/><button id="stop" disabled>Stop</button></div>
+        <span class="pill"><b>Status</b> <span id="status">idle</span></span>
+        <span class="pill"><b>Channel</b> <span id="activeCh">—</span></span>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div>
+          <label for="freq">Tuner frequency (MHz)</label><br/>
+          <input id="freq" type="number" step="0.1" value="99.5" style="width:140px" />
+        </div>
+        <div>
+          <label for="step">Step (MHz)</label><br/>
+          <select id="step">
+            <option value="0.05">0.05</option>
+            <option value="0.1" selected>0.1</option>
+            <option value="0.2">0.2</option>
+            <option value="0.5">0.5</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="down">−</button></div>
+        <div><label>&nbsp;</label><br/><button id="up">+</button></div>
+        <div>
+          <label for="profile">Enhancer profile</label><br/>
+          <select id="profile">
+            <option value="clean" selected>Clean (balanced)</option>
+            <option value="voice">Voice (news/talk)</option>
+            <option value="music">Music (wide, dehiss)</option>
+            <option value="weak">Weak signal (aggressive denoise)</option>
+          </select>
+        </div>
+        <span class="pill"><b>Enhance</b> <span id="enhState" class="ok">ON</span></span>
+        <div><label>&nbsp;</label><br/><button id="toggleEnh">Toggle</button></div>
+      </div>
+
+      <div class="hint">
+        “Channel” here means a stored frequency + enhancement profile + optional notes. Persisted via localStorage.
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div style="flex:1;min-width:240px">
+          <label for="name">Save channel name</label><br/>
+          <input id="name" type="text" placeholder="e.g. City FM" style="width:100%" />
+        </div>
+        <div style="flex:1;min-width:240px">
+          <label for="note">Notes</label><br/>
+          <input id="note" type="text" placeholder="optional" style="width:100%" />
+        </div>
+        <div><label>&nbsp;</label><br/><button id="saveCh">Save</button></div>
+        <div><label>&nbsp;</label><br/><button id="exportCh">Export channels (JSON)</button></div>
+        <div>
+          <label>&nbsp;</label><br/>
+          <button id="importCh">Import</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" />
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <label>Channel select buttons</label>
+      <div class="chips" id="chips"></div>
+
+      <div class="hr"></div>
+
+      <div class="kpi">
+        <div class="box"><p class="t">Input level</p><p class="v mono" id="lvl">—</p></div>
+        <div class="box"><p class="t">Noise estimate</p><p class="v mono" id="noise">—</p></div>
+        <div class="box"><p class="t">Quality</p><p class="v mono" id="qual">—</p></div>
+      </div>
+
+      <div class="hr"></div>
+
+      <label>Spectrum</label>
+      <canvas id="spec" width="1100" height="220"></canvas>
+      <div class="hint">
+        Quality = ratio of “useful band energy” to “hiss+hum bands” (deterministic, no ML).
+      </div>
+
+      <div class="hr"></div>
+      <label>Log</label>
+      <div class="log mono" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h1 style="font-size:16px;margin-top:0">Bridge hook</h1>
+      <p class="small mono">
+        If you later build a native app that captures Playback audio and feeds PCM to this page, call:
+        <br/><br/>
+        window.__baz_pushPCM(Int16Array samples, sampleRate, channels)
+      </p>
+      <div class="hr"></div>
+      <h1 style="font-size:16px;margin-top:0">Profiles</h1>
+      <p class="small">
+        Clean: mild hum notch + mild dehiss + soft limiter<br/>
+        Voice: stronger 300–3400 emphasis + hum notch<br/>
+        Music: gentle wideband + dehiss shaping<br/>
+        Weak: tighter lowpass + stronger hiss cut + more notches
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id)=>document.getElementById(id);
+  const logEl = $("log");
+  const specCv = $("spec");
+  const sctx = specCv.getContext("2d", {alpha:false});
+
+  let audioCtx = null;
+  let srcNode = null;
+  let analyser = null;
+  let procChain = null;
+  let micStream = null;
+  let raf = null;
+  let enhancing = true;
+
+  const STORE_KEY = "baz_tuner_channels_v1";
+  let channels = [];
+  let activeId = null;
+
+  function log(msg, dim=false){
+    const div=document.createElement("div");
+    if(dim) div.className="dim";
+    div.textContent = msg;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setStatus(s){ $("status").textContent = s; }
+  function setActive(name){ $("activeCh").textContent = name || "—"; }
+  function setEnhState(){
+    const el = $("enhState");
+    el.textContent = enhancing ? "ON" : "OFF";
+    el.className = enhancing ? "ok" : "warn";
+  }
+
+  // ---------- Filter “pole-bank” (biquad cascade) ----------
+  function makeBiquad(type, freq, Q, gainDB=0){
+    const node = audioCtx.createBiquadFilter();
+    node.type = type;
+    node.frequency.value = freq;
+    node.Q.value = Q;
+    if(type === "peaking" || type === "lowshelf" || type === "highshelf") node.gain.value = gainDB;
+    return node;
+  }
+
+  function buildChain(profile){
+    if(procChain){
+      try{ procChain.in.disconnect(); }catch{}
+      try{ procChain.out.disconnect(); }catch{}
+    }
+    const input = audioCtx.createGain();
+    const out = audioCtx.createGain();
+
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = -18;
+    comp.knee.value = 18;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.08;
+
+    const notch50 = makeBiquad("notch", 50, 30);
+    const notch60 = makeBiquad("notch", 60, 30);
+    const hp = makeBiquad("highpass", 80, 0.707);
+
+    const hissCut = makeBiquad("highshelf", 9000, 0.707, -6);
+
+    const voiceMid = makeBiquad("peaking", 1600, 1.1, +4);
+    const voiceLP = makeBiquad("lowpass", 4500, 0.707);
+
+    const musicLow = makeBiquad("lowshelf", 120, 0.707, +2);
+    const musicAir = makeBiquad("highshelf", 10000, 0.707, +1);
+    const musicLP = makeBiquad("lowpass", 14000, 0.707);
+
+    const weakLP = makeBiquad("lowpass", 6500, 0.707);
+    const weakHiss = makeBiquad("highshelf", 7000, 0.707, -10);
+    const weakMid = makeBiquad("peaking", 2200, 0.9, +3);
+
+    let last = input;
+    last.connect(notch50); last = notch50;
+    last.connect(notch60); last = notch60;
+    last.connect(hp); last = hp;
+
+    if(profile === "clean"){
+      last.connect(hissCut); last = hissCut;
+      const pres = makeBiquad("peaking", 2800, 1.0, +1.5);
+      last.connect(pres); last = pres;
+      last.connect(musicLP); last = musicLP;
+    } else if(profile === "voice"){
+      last.connect(voiceMid); last = voiceMid;
+      const voiceHP2 = makeBiquad("highpass", 140, 0.707);
+      last.connect(voiceHP2); last = voiceHP2;
+      last.connect(voiceLP); last = voiceLP;
+      const hiss2 = makeBiquad("highshelf", 7000, 0.707, -7);
+      last.connect(hiss2); last = hiss2;
+    } else if(profile === "music"){
+      last.connect(musicLow); last = musicLow;
+      last.connect(hissCut); last = hissCut;
+      last.connect(musicAir); last = musicAir;
+      last.connect(musicLP); last = musicLP;
+    } else { // weak
+      last.connect(weakMid); last = weakMid;
+      last.connect(weakHiss); last = weakHiss;
+      last.connect(weakLP); last = weakLP;
+      const notch150 = makeBiquad("notch", 150, 20);
+      last.connect(notch150); last = notch150;
+    }
+
+    last.connect(comp);
+    comp.connect(out);
+
+    procChain = {in: input, out, comp};
+    return procChain;
+  }
+
+  function connectGraph(inputNode){
+    if(analyser) try{ analyser.disconnect(); }catch{}
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
+
+    const chain = buildChain($("profile").value);
+
+    // connect source to chain input
+    inputNode.connect(chain.in);
+
+    if(!enhancing){
+      try{ inputNode.disconnect(); }catch{}
+      const g = audioCtx.createGain();
+      g.gain.value = 1.0;
+      inputNode.connect(g);
+      g.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      procChain = {in:g, out:g};
+      return;
+    }
+
+    chain.out.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+
+  function rebuildEnhancer(){
+    if(!audioCtx || !srcNode) return;
+    try{ srcNode.disconnect(); }catch{}
+    try{ analyser && analyser.disconnect(); }catch{}
+    try{ procChain && procChain.in && procChain.in.disconnect(); }catch{}
+    try{ procChain && procChain.out && procChain.out.disconnect(); }catch{}
+    connectGraph(srcNode);
+  }
+
+  $("profile").onchange = () => {
+    log(`profile -> ${$("profile").value}`, true);
+    rebuildEnhancer();
+    if(activeId){
+      const ch = channels.find(c=>c.id===activeId);
+      if(ch){ ch.profile = $("profile").value; saveStore(); renderChips(); }
+    }
+  };
+
+  $("toggleEnh").onclick = () => {
+    enhancing = !enhancing;
+    setEnhState();
+    log(`enhance ${enhancing ? "ON" : "OFF"}`, true);
+    rebuildEnhancer();
+  };
+
+  // ---------- Spectrum + quality ----------
+  function drawSpectrum(){
+    if(!analyser || !audioCtx) return;
+    const W = specCv.width, H = specCv.height;
+    sctx.fillStyle = "#0b0f14";
+    sctx.fillRect(0,0,W,H);
+
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buf);
+
+    const n = buf.length;
+    const barW = W / n;
+    sctx.fillStyle = "rgba(106,228,255,.65)";
+    for(let i=0;i<n;i++){
+      const v = buf[i] / 255;
+      const h = Math.max(1, v * (H-18));
+      sctx.fillRect(i*barW, H-h, Math.max(1,barW), h);
+    }
+
+    const sr = audioCtx.sampleRate;
+    const ny = sr/2;
+    const binHz = ny / n;
+
+    function bandEnergy(f0,f1){
+      const a = Math.max(0, Math.floor(f0/binHz));
+      const b = Math.min(n-1, Math.floor(f1/binHz));
+      let s=0;
+      for(let i=a;i<=b;i++){ const x=buf[i]/255; s += x*x; }
+      return s / Math.max(1,(b-a+1));
+    }
+
+    const E_voice = bandEnergy(300, 3400);
+    const E_mid   = bandEnergy(300, 8000);
+    const E_hum   = bandEnergy(40, 120);
+    const E_hiss  = bandEnergy(9000, Math.min(16000, ny-1));
+
+    const noise = 0.6*E_hiss + 0.4*E_hum + 1e-6;
+    const sig = 0.55*E_voice + 0.45*E_mid + 1e-6;
+
+    const q = sig / noise;
+    const qDb = 10*Math.log10(q);
+
+    $("qual").textContent = isFinite(qDb) ? (qDb.toFixed(2)+" dB") : "—";
+    $("noise").textContent = (10*Math.log10(noise+1e-12)).toFixed(2) + " dB (rel)";
+    $("lvl").textContent = (10*Math.log10(sig+1e-12)).toFixed(2) + " dB (rel)";
+
+    sctx.fillStyle = "rgba(233,242,255,.85)";
+    sctx.font = "12px ui-monospace, Menlo, Consolas, monospace";
+    sctx.fillText(`quality≈${qDb.toFixed(2)} dB`, 10, 14);
+
+    raf = requestAnimationFrame(drawSpectrum);
+  }
+
+  // ---------- Channels persistence ----------
+  function uuid(){ return Math.random().toString(16).slice(2)+Math.random().toString(16).slice(2); }
+  function saveStore(){ localStorage.setItem("baz_tuner_channels_v1", JSON.stringify(channels)); }
+  function loadStore(){
+    try{ const t = localStorage.getItem("baz_tuner_channels_v1"); if(t) channels = JSON.parse(t) || []; }
+    catch{ channels = []; }
+  }
+  function renderChips(){
+    const box = $("chips");
+    box.innerHTML = "";
+    if(channels.length === 0){
+      const d=document.createElement("div");
+      d.className="small";
+      d.textContent="No channels saved yet.";
+      box.appendChild(d);
+      return;
+    }
+    for(const ch of channels){
+      const chip = document.createElement("div");
+      chip.className = "chip" + (ch.id===activeId ? " active" : "");
+      chip.title = ch.note || "";
+      const label = document.createElement("span");
+      label.textContent = `${ch.name}  (${Number(ch.freq).toFixed(1)} MHz • ${ch.profile})`;
+      const x = document.createElement("span");
+      x.className = "x";
+      x.textContent = "×";
+
+      x.onclick = (ev)=>{
+        ev.stopPropagation();
+        channels = channels.filter(c=>c.id!==ch.id);
+        if(activeId===ch.id){ activeId=null; setActive("—"); }
+        saveStore(); renderChips();
+        log(`deleted channel: ${ch.name}`, true);
+      };
+
+      chip.onclick = ()=>{
+        activeId = ch.id;
+        $("freq").value = String(ch.freq);
+        $("profile").value = ch.profile || "clean";
+        $("name").value = ch.name || "";
+        $("note").value = ch.note || "";
+        setActive(ch.name);
+        log(`selected channel: ${ch.name} @ ${ch.freq} MHz`, true);
+        rebuildEnhancer();
+        renderChips();
+      };
+
+      chip.appendChild(label);
+      chip.appendChild(x);
+      box.appendChild(chip);
+    }
+  }
+
+  $("saveCh").onclick = ()=>{
+    const name = ($("name").value||"").trim();
+    if(!name){ log("name required to save channel"); return; }
+    const freq = Number($("freq").value||0);
+    const note = ($("note").value||"").trim();
+    const profile = $("profile").value;
+
+    let ch = channels.find(c => c.id===activeId);
+    if(!ch){
+      ch = {id: uuid(), name, freq, note, profile, created: new Date().toISOString()};
+      channels.unshift(ch);
+      activeId = ch.id;
+    } else {
+      ch.name=name; ch.freq=freq; ch.note=note; ch.profile=profile;
+    }
+    saveStore();
+    setActive(name);
+    renderChips();
+    log(`saved channel: ${name} @ ${freq.toFixed(1)} MHz (${profile})`, true);
+  };
+
+  $("exportCh").onclick = ()=>{
+    const payload = { created: new Date().toISOString(), channels };
+    const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "baz_tuner_channels.json";
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1500);
+  };
+
+  $("importCh").onclick = ()=> $("importFile").click();
+  $("importFile").onchange = async (ev)=>{
+    const f = ev.target.files && ev.target.files[0];
+    if(!f) return;
+    try{
+      const obj = JSON.parse(await f.text());
+      if(Array.isArray(obj.channels)){
+        const map = new Map(channels.map(c=>[c.id,c]));
+        for(const c of obj.channels){ if(c && c.id) map.set(c.id, c); }
+        channels = Array.from(map.values());
+        saveStore(); renderChips();
+        log(`imported ${obj.channels.length} channels`, true);
+      } else log("import JSON missing channels[]");
+    }catch(e){
+      log("import failed: " + (e.message||String(e)));
+    } finally { ev.target.value=""; }
+  };
+
+  // ---------- Tuner step buttons ----------
+  $("up").onclick = ()=>{
+    const step = Number($("step").value||0.1);
+    $("freq").value = (Number($("freq").value||0)+step).toFixed(2);
+  };
+  $("down").onclick = ()=>{
+    const step = Number($("step").value||0.1);
+    $("freq").value = (Number($("freq").value||0)-step).toFixed(2);
+  };
+
+  // ---------- Input start/stop + Bridge ----------
+  let bridge = {
+    sr: 48000, ch: 1,
+    buffer: new Float32Array(0),
+    writePos: 0, readPos: 0, capacity: 0,
+    node: null,
+    ensure(capacity){
+      if(this.capacity >= capacity) return;
+      this.capacity = capacity;
+      this.buffer = new Float32Array(capacity);
+      this.writePos = 0;
+      this.readPos = 0;
+    },
+    write(samplesF32){
+      const n = samplesF32.length;
+      if(n > this.capacity) this.ensure(n*2);
+      for(let i=0;i<n;i++){
+        this.buffer[this.writePos] = samplesF32[i];
+        this.writePos = (this.writePos + 1) % this.capacity;
+        if(this.writePos === this.readPos) this.readPos = (this.readPos + 1) % this.capacity;
+      }
+    },
+    read(out){
+      const n = out.length;
+      for(let i=0;i<n;i++){
+        if(this.readPos === this.writePos) out[i]=0;
+        else { out[i]=this.buffer[this.readPos]; this.readPos=(this.readPos+1)%this.capacity; }
+      }
+    }
+  };
+
+  window.__baz_pushPCM = (int16Samples, sampleRate, channelsCount) => {
+    if(!audioCtx) return;
+    const n = int16Samples.length;
+    const f = new Float32Array(n);
+    for(let i=0;i<n;i++) f[i] = int16Samples[i] / 32768;
+    bridge.sr = sampleRate || bridge.sr;
+    bridge.ch = channelsCount || 1;
+    bridge.ensure(Math.max(bridge.capacity, bridge.sr*2));
+    bridge.write(f);
+  };
+
+  async function startMic(){
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+    });
+    srcNode = audioCtx.createMediaStreamSource(micStream);
+    connectGraph(srcNode);
+  }
+
+  function startBridge(){
+    const sp = audioCtx.createScriptProcessor(2048, 0, 1);
+    const g = audioCtx.createGain();
+    g.gain.value = 1.0;
+    sp.onaudioprocess = (ev)=>{
+      const ch0 = ev.outputBuffer.getChannelData(0);
+      bridge.read(ch0);
+    };
+    sp.connect(g);
+    srcNode = g;
+    connectGraph(srcNode);
+    bridge.node = sp;
+  }
+
+  async function start(){
+    if(audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({latencyHint:"interactive"});
+    setStatus("starting…");
+    log(`AudioContext sampleRate=${audioCtx.sampleRate}`, true);
+
+    const mode = $("inputMode").value;
+    if(mode === "mic"){ await startMic(); log("input: mic", true); }
+    else { startBridge(); log("input: bridge (waiting for PCM push)", true); }
+
+    $("start").disabled = true;
+    $("stop").disabled = false;
+    setStatus("running");
+    setEnhState();
+    raf = requestAnimationFrame(drawSpectrum);
+  }
+
+  async function stop(){
+    try{ if(raf) cancelAnimationFrame(raf); }catch{}
+    raf=null;
+    try{ analyser && analyser.disconnect(); }catch{}
+    try{ srcNode && srcNode.disconnect(); }catch{}
+    try{ procChain && procChain.in && procChain.in.disconnect(); }catch{}
+    try{ procChain && procChain.out && procChain.out.disconnect(); }catch{}
+    try{ bridge.node && bridge.node.disconnect(); }catch{}
+    try{ micStream && micStream.getTracks().forEach(t=>t.stop()); }catch{}
+    micStream=null; srcNode=null; procChain=null; analyser=null;
+    if(audioCtx){ try{ await audioCtx.close(); }catch{} }
+    audioCtx=null;
+    $("start").disabled=false;
+    $("stop").disabled=true;
+    setStatus("idle");
+    log("stopped", true);
+  }
+
+  $("start").onclick = async ()=>{ try{ await start(); }catch(e){ log("start failed: "+(e.message||String(e))); setStatus("error"); await stop(); } };
+  $("stop").onclick = stop;
+
+  // init
+  loadStore();
+  renderChips();
+  setEnhState();
+  log("ready. save channels and tap buttons to select.", true);
+})();
+</script>
+</body>
+</html>

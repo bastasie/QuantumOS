@@ -1,0 +1,1654 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>BAZ TRX (P2P Audio/Video + Data)</title>
+  <style>
+    :root{--bg:#0b0f14;--muted:#9fb0c3;--text:#e9f2ff;--accent:#6ae4ff;--ok:#4dff88;--warn:#ffdf6a;--bad:#ff6a6a;}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);}
+    .wrap{max-width:1200px;margin:0 auto;padding:16px;}
+    h1{margin:8px 0 4px;font-size:20px;font-weight:820;letter-spacing:.2px}
+    .sub{color:var(--muted);margin:0 0 14px;font-size:13px;line-height:1.35}
+    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:14px;box-shadow:0 14px 40px rgba(0,0,0,.35)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+    label{font-size:12px;color:var(--muted)}
+    input,button,select,textarea{
+      border-radius:12px;border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.25);color:var(--text);padding:10px 12px;font-size:14px;outline:none;
+    }
+    textarea{width:100%;min-height:120px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    input::placeholder,textarea::placeholder{color:rgba(159,176,195,.65)}
+    button{cursor:pointer;background:rgba(106,228,255,.10);border-color:rgba(106,228,255,.35)}
+    button:hover{background:rgba(106,228,255,.14)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:6px 10px;font-size:12px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18);color:var(--muted)}
+    .pill b{color:var(--text);font-weight:760}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .hr{height:1px;background:rgba(255,255,255,.08);margin:12px 0}
+    .small{font-size:12px;color:var(--muted);line-height:1.45}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+    .videos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media (max-width: 700px){.videos{grid-template-columns:1fr}}
+    video{width:100%;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18)}
+    .log{height:170px;overflow:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.16);padding:10px;font-size:12px;color:#cfe0ff}
+    .log .dim{color:rgba(233,242,255,.6)}
+  
+    /* Tabs */
+    .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
+    .tabBtn{padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);color:inherit;font-weight:700}
+    .tabBtn.active{background:rgba(106,228,255,.14);border-color:rgba(106,228,255,.45)}
+    .tabBtn:disabled{opacity:.55}
+
+    /* Monograph */
+    #viewMONO{display:none}
+    .monoPanel{display:grid;grid-template-columns:1fr;gap:12px}
+    .monoStage{
+      border-radius:18px;border:1px solid rgba(255,255,255,.10);
+      background:#000; overflow:hidden;
+      box-shadow:0 18px 60px rgba(0,0,0,.35);
+    }
+    #monoCanvas{display:block;width:100%;height:70vh;background:#000}
+    @media (max-width: 700px){#monoCanvas{height:72vh}}
+    .tilt45{transform:perspective(900px) rotateX(45deg);transform-origin:center;}
+    .monoText{white-space:pre-wrap;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size:12px;line-height:1.35;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:12px}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BAZ TRX (P2P Audio/Video + Data)</h1>
+  <p class="sub">
+    Practical transmitter/receiver: uses <span class="mono">WebRTC</span> to send camera + mic + a data channel
+    between two phones running the same file. This is normal network transport (Wi‑Fi/cellular) with encrypted WebRTC media.
+  </p>
+
+  
+  <div class="tabs">
+    <button id="tabTrx" class="tabBtn active">TRX</button>
+    <button id="tabMono" class="tabBtn">Monograph</button>
+    <span class="pill"><b>Sync</b> <span id="syncState">off</span></span>
+  </div>
+
+  <div id="viewTRX">
+
+<div class="grid">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>Role</label><br/>
+          <select id="role">
+            <option value="a" selected>Device A (creates Offer)</option>
+            <option value="b">Device B (creates Answer)</option>
+          </select>
+        </div>
+        <div>
+          <label>STUN</label><br/>
+          <select id="stun">
+            <option value="google" selected>stun:stun.l.google.com:19302</option>
+            <option value="twilio">stun:global.stun.twilio.com:3478</option>
+            <option value="none">None (LAN only)</option>
+          </select>
+        </div>
+        <div style="min-width:170px">
+          <label>ICE timeout</label><br/>
+          <select id="iceTimeout">
+            <option value="3000">3s (fast)</option>
+            <option value="6000" selected>6s (default)</option>
+            <option value="12000">12s (slow networks)</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="init">Init TRX</button></div>
+        <div><label>&nbsp;</label><br/><button id="hangup" disabled>Hang up</button></div>
+        <span class="pill"><b>RTC</b> <span id="rtcState">idle</span></span>
+        <span class="pill"><b>ICE</b> <span id="iceState">—</span></span>
+        <span class="pill"><b>Cands</b> <span id="candCount">0</span></span>
+        <span class="pill"><b>DC</b> <span id="dcState">—</span></span>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div>
+          <label>Camera</label><br/>
+          <select id="camMode">
+            <option value="none" selected>Off</option>
+            <option value="user">Front</option>
+            <option value="env">Back</option>
+          </select>
+        </div>
+        <div>
+          <label>Mic</label><br/>
+          <select id="micMode">
+            <option value="on" selected>On</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <div style="min-width:180px">
+          <label>Proof overlay</label><br/>
+          <select id="overlayMode">
+            <option value="on" selected>Timestamp overlay (real-time)</option>
+            <option value="off">Off (raw camera)</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><br/><button id="startMedia" disabled>Start media</button></div>
+        <div><label>&nbsp;</label><br/><button id="stopMedia" disabled>Stop media</button></div>
+        <span class="pill"><b>Media</b> <span id="mediaState">off</span></span>
+      </div>
+
+      <div class="videos" style="margin-top:10px">
+        <div>
+          <label>Local</label>
+          <video id="local" autoplay playsinline muted></video>
+        </div>
+        <div>
+          <label>Remote</label>
+          <video id="remote" autoplay playsinline></video>
+        </div>
+      
+      <div class="hr"></div>
+      <label>Live proof (WebRTC stats)</label>
+      <div class="small">
+        Pulled from <span class="mono">pc.getStats()</span>: bitrate, packets, jitter, RTT, ICE pair.
+        This reflects real media + network flow.
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="pill"><b>TX video</b> <span id="stTxV">—</span></span>
+        <span class="pill"><b>RX video</b> <span id="stRxV">—</span></span>
+        <span class="pill"><b>TX audio</b> <span id="stTxA">—</span></span>
+        <span class="pill"><b>RX audio</b> <span id="stRxA">—</span></span>
+        <span class="pill"><b>RTT</b> <span id="stRtt">—</span></span>
+        <span class="pill"><b>Jitter</b> <span id="stJit">—</span></span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span class="pill"><b>ICE pair</b> <span id="stPair">—</span></span>
+        <span class="pill"><b>Avail out</b> <span id="stAvail">—</span></span>
+      </div>
+</div>
+
+      <div class="hr"></div>
+
+      <label>Signaling (manual copy/paste)</label>
+      <p class="small">
+        This build uses <b>non-trickle ICE</b>: you copy a single JSON blob after ICE gathering completes.
+      </p>
+
+      <div class="row">
+        <div style="flex:1;min-width:240px">
+          <label>Local JSON</label><br/>
+          <textarea id="localSDP" readonly placeholder="Press Create Offer/Answer…"></textarea>
+          <div class="row">
+            <button id="createOffer" disabled>Create Offer</button>
+            <button id="createAnswer" disabled>Create Answer</button>
+            <button id="copyLocal" disabled>Copy</button>
+            <button id="showLocalQR" disabled>Show as QR</button>
+          </div>
+        </div>
+        <div style="flex:1;min-width:240px">
+          <label>Remote JSON</label><br/>
+          <textarea id="remoteSDP" placeholder="Paste remote Offer/Answer JSON here…"></textarea>
+          <div class="row">
+            <button id="setRemote" disabled>Set Remote</button>
+            <button id="scanRemoteQR">Scan QR</button>
+            <button id="clearRemote">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <label>Data channel (messages)</label>
+      <div class="row">
+        <div style="flex:1;min-width:240px">
+          <input id="msg" type="text" placeholder="Type message…" style="width:100%" />
+        </div>
+        <div><label>&nbsp;</label><br/><button id="send" disabled>Send</button></div>
+        <div><label>&nbsp;</label><br/><button id="sendBurst" disabled>Send “pole burst”</button></div>
+      </div>
+
+      <div class="hr"></div>
+      <label>Log</label>
+      <div class="log mono" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h1 style="font-size:16px;margin-top:0">How to connect two phones</h1>
+      <ol class="small">
+        <li>Open this file on both phones (prefer installed PWA / https).</li>
+        <li>On <b>Phone A</b>: Role = Device A → Init TRX → Start media → Create Offer → Copy JSON.</li>
+        <li>Send JSON to <b>Phone B</b> and paste into Remote JSON → Set Remote.</li>
+        <li>On <b>Phone B</b>: Create Answer → Copy JSON back to Phone A.</li>
+        <li>On <b>Phone A</b>: paste Answer → Set Remote. Wait for “connected”.</li>
+      </ol>
+
+      <div class="hr"></div>
+
+      <h1 style="font-size:16px;margin-top:0">About “quantum TRX”</h1>
+      <p class="small">
+        You can treat your pole-grid/BasUni math as an <i>encoding layer</i> over the data channel (spreading, transforms, ECC).
+        But the transport still uses normal radios (Wi‑Fi/cellular). Browsers do not expose raw antenna control or direct “RF dBm” access.
+      </p>
+
+      <div class="hr"></div>
+
+      <h1 style="font-size:16px;margin-top:0">“Pole burst”</h1>
+      <p class="small">
+        Sends a deterministic burst pattern based on a time slice. Useful for measuring latency/jitter and future modulation experiments.
+      </p>
+    </div>
+  </div>
+</div>
+
+
+
+  </div> <!-- /viewTRX -->
+
+  <div id="viewMONO">
+    <div class="monoPanel">
+      <div class="card">
+        <div class="row" style="flex-wrap:wrap">
+          <button id="monoStart">Start</button>
+          <button id="monoStop" disabled>Stop</button>
+          <button id="monoFull">Fullscreen</button>
+          <button id="monoTilt">Tilt 45°</button>
+        </div>
+        <div class="row" style="flex-wrap:wrap">
+          <div>
+            <label>Pole count (≥3)</label><br/>
+            <select id="monoPoles">
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="6">6</option>
+              <option value="8">8</option>
+              <option value="12">12</option>
+            </select>
+          </div>
+          <div>
+            <label>Matrix (resolution)</label><br/>
+            <select id="monoRes">
+              <option value="96">96×96</option>
+              <option value="128" selected>128×128</option>
+              <option value="160">160×160</option>
+              <option value="192">192×192</option>
+              <option value="256">256×256</option>
+            </select>
+          </div>
+          <div>
+            <label>Sync over DataChannel</label><br/>
+            <select id="monoSync">
+              <option value="off" selected>off</option>
+              <option value="tx">TX (broadcast)</option>
+              <option value="rx">RX (follow)</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:220px">
+            <label>Notes</label><br/>
+            <div class="small">This is a controllable pixel/photon emitter-field visualization. “Floating” needs real optics; the field is what you align at 45°.</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="monoTiltWrap" class="monoStage">
+        <canvas id="monoCanvas"></canvas>
+      </div>
+
+      <div class="monoText">
+        <div class="row" style="flex-wrap:wrap;align-items:center">
+          <button id="monoLoadText">Load monograph excerpt</button>
+          <button id="monoClearText">Clear</button>
+          <span class="pill"><b>State</b> <span id="monoState">idle</span></span>
+        </div>
+        <div id="monoText"></div>
+      </div>
+    </div>
+  </div>
+
+
+<!-- QR Modal -->
+<div id="qrModal" style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);z-index:9999;padding:16px">
+  <div style="max-width:760px;width:100%;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.10);border-radius:18px;padding:14px;box-shadow:0 18px 60px rgba(0,0,0,.45)">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:820">QR Handshake</div>
+        <div class="small" id="qrHelp">—</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="qrClose">Close</button>
+      </div>
+    </div>
+    <div class="hr"></div>
+    <div id="qrShowPane" style="display:none">
+      <div class="row" style="align-items:center">
+        <span class="pill"><b>Mode</b> show</span>
+        <span class="pill"><b>Chunk</b> <span id="qrChunk">—</span></span>
+        <span class="pill"><b>ID</b> <span id="qrId" class="mono">—</span></span>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:12px">
+        <canvas id="qrCanvas" width="360" height="360" style="border-radius:14px;border:1px solid rgba(255,255,255,.10);background:#fff"></canvas>
+      </div>
+      <div class="row" style="justify-content:center;margin-top:10px">
+        <button id="qrPrev">◀ Prev</button>
+        <button id="qrPlay">Auto</button>
+        <button id="qrNext">Next ▶</button>
+      </div>
+    </div>
+
+    <div id="qrScanPane" style="display:none">
+      <div class="row" style="align-items:center">
+        <span class="pill"><b>Mode</b> scan</span>
+        <span class="pill"><b>Got</b> <span id="qrGot">0</span>/<span id="qrTot">0</span></span>
+        <span class="pill"><b>ID</b> <span id="qrScanId" class="mono">—</span></span>
+        <span class="pill"><b>Status</b> <span id="qrScanStatus">—</span></span>
+      </div>
+      <div style="display:flex;justify-content:center;margin-top:12px">
+        <video id="qrVideo" autoplay playsinline muted style="width:min(560px,100%);border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.18)"></video>
+      </div>
+      <div class="small" style="margin-top:10px">
+        Tip: point your camera at the QR. For multi‑chunk payloads, keep scanning as the other phone flips chunks.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id)=>document.getElementById(id);
+
+  function parseJsonLoose(txt){
+    const s = String(txt||"").trim().replace(/\u0000/g,"");
+    if(!s) throw new Error("empty JSON");
+    try{ return JSON.parse(s); }catch(e){}
+    // try slicing the first balanced object (handles trailing garbage)
+    const a = s.indexOf("{");
+    const b = s.lastIndexOf("}");
+    if(a!==-1 && b!==-1 && b>a){
+      try{ return JSON.parse(s.slice(a,b+1)); }catch(e){}
+    }
+    // try array slice
+    const aa = s.indexOf("[");
+    const bb = s.lastIndexOf("]");
+    if(aa!==-1 && bb!==-1 && bb>aa){
+      try{ return JSON.parse(s.slice(aa,bb+1)); }catch(e){}
+    }
+    throw new Error("invalid JSON");
+  }
+
+  const logEl = $("log");
+  const localV = $("local");
+  const remoteV = $("remote");
+
+  let pc = null;
+  let dc = null;
+  let localStream = null;      // raw getUserMedia stream
+  let sendStream = null;       // stream attached to RTCPeerConnection (raw or overlay)
+  let overlayStream = null;
+  let overlayRaf = null;
+  let rawVideoEl = null;
+  let overlayCanvas = null;
+  let statsTimer = null;
+  const statsPrev = {ts:0, outVBytes:0, inVBytes:0, outABytes:0, inABytes:0};
+  let candN = 0;
+
+  function log(msg, dim=false){
+    const div=document.createElement("div");
+    if(dim) div.className="dim";
+    div.textContent = msg;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function fmtKbps(bps){
+    if(!Number.isFinite(bps)) return "—";
+    const kb = bps/1000;
+    if(kb < 1000) return kb.toFixed(0) + " kbps";
+    return (kb/1000).toFixed(2) + " Mbps";
+  }
+
+  function stopOverlay(){
+    if(overlayRaf){ cancelAnimationFrame(overlayRaf); overlayRaf=null; }
+    if(overlayStream){
+      try{ overlayStream.getTracks().forEach(t=>t.stop()); }catch{}
+      overlayStream=null;
+    }
+    rawVideoEl = null;
+    overlayCanvas = null;
+  }
+
+  function buildOverlayStream(rawStream){
+    const vTrack = rawStream.getVideoTracks()[0];
+    if(!vTrack) return null;
+
+    rawVideoEl = document.createElement("video");
+    rawVideoEl.srcObject = new MediaStream([vTrack]);
+    rawVideoEl.muted = true;
+    rawVideoEl.playsInline = true;
+
+    overlayCanvas = document.createElement("canvas");
+    const st = vTrack.getSettings ? vTrack.getSettings() : {};
+    const W = st.width || 640;
+    const H = st.height || 360;
+    overlayCanvas.width = W;
+    overlayCanvas.height = H;
+    const ctx = overlayCanvas.getContext("2d");
+
+    const draw = ()=>{
+      try{
+        if(rawVideoEl.readyState >= 2){
+          ctx.drawImage(rawVideoEl, 0, 0, W, H);
+          const now = new Date();
+          const ts = now.toISOString().replace("T"," ").replace("Z"," UTC");
+          ctx.fillStyle = "rgba(0,0,0,.45)";
+          ctx.fillRect(10, 10, 430, 56);
+          ctx.fillStyle = "rgba(233,242,255,.92)";
+          ctx.font = "20px ui-monospace, Menlo, Consolas, monospace";
+          ctx.fillText(ts, 18, 42);
+          ctx.font = "14px ui-monospace, Menlo, Consolas, monospace";
+          ctx.fillStyle = "rgba(106,228,255,.92)";
+          ctx.fillText("LIVE CAMERA → CANVAS → WebRTC", 18, 62);
+        }
+      } catch {}
+      overlayRaf = requestAnimationFrame(draw);
+    };
+
+    rawVideoEl.play().then(()=>{
+      overlayRaf = requestAnimationFrame(draw);
+    }).catch(()=>{
+      overlayRaf = requestAnimationFrame(draw);
+    });
+
+    const stream = overlayCanvas.captureStream ? overlayCanvas.captureStream(30) : null;
+    return stream;
+  }
+
+  function attachSendTracks(stream){
+    if(!pc) return;
+    try{
+      const senders = pc.getSenders ? pc.getSenders() : [];
+      for(const s of senders){
+        if(s && s.track){
+          try{ pc.removeTrack(s); }catch{}
+        }
+      }
+    }catch{}
+    for(const track of stream.getTracks()){
+      pc.addTrack(track, stream);
+    }
+  }
+
+  function startStatsLoop(){
+    if(statsTimer) clearInterval(statsTimer);
+    statsTimer = setInterval(async ()=>{
+      if(!pc) return;
+      try{
+        const reports = await pc.getStats();
+        let outV=null, inV=null, outA=null, inA=null, candPair=null;
+
+        reports.forEach(r=>{
+          if(r.type==="outbound-rtp" && !r.isRemote){
+            if(r.kind==="video") outV = r;
+            if(r.kind==="audio") outA = r;
+          }
+          if(r.type==="inbound-rtp" && !r.isRemote){
+            if(r.kind==="video") inV = r;
+            if(r.kind==="audio") inA = r;
+          }
+          if(r.type==="candidate-pair" && r.state==="succeeded" && r.nominated){
+            candPair = r;
+          }
+        });
+
+        const now = performance.now();
+        const dt = (statsPrev.ts>0) ? (now - statsPrev.ts)/1000 : 0;
+        let txVbps=null, rxVbps=null, txAbps=null, rxAbps=null;
+
+        if(dt>0 && outV && Number.isFinite(outV.bytesSent)){
+          txVbps = (outV.bytesSent - statsPrev.outVBytes)*8/dt;
+          statsPrev.outVBytes = outV.bytesSent;
+        }
+        if(dt>0 && inV && Number.isFinite(inV.bytesReceived)){
+          rxVbps = (inV.bytesReceived - statsPrev.inVBytes)*8/dt;
+          statsPrev.inVBytes = inV.bytesReceived;
+        }
+        if(dt>0 && outA && Number.isFinite(outA.bytesSent)){
+          txAbps = (outA.bytesSent - statsPrev.outABytes)*8/dt;
+          statsPrev.outABytes = outA.bytesSent;
+        }
+        if(dt>0 && inA && Number.isFinite(inA.bytesReceived)){
+          rxAbps = (inA.bytesReceived - statsPrev.inABytes)*8/dt;
+          statsPrev.inABytes = inA.bytesReceived;
+        }
+        statsPrev.ts = now;
+
+        const jitter = (inA && Number.isFinite(inA.jitter)) ? inA.jitter : null;
+        let rtt=null, availOut=null;
+        if(candPair){
+          if(Number.isFinite(candPair.currentRoundTripTime)) rtt = candPair.currentRoundTripTime;
+          if(Number.isFinite(candPair.availableOutgoingBitrate)) availOut = candPair.availableOutgoingBitrate;
+
+          const l = candPair.localCandidateId ? reports.get(candPair.localCandidateId) : null;
+          const r = candPair.remoteCandidateId ? reports.get(candPair.remoteCandidateId) : null;
+          const lp = l ? `${l.protocol||"?"}/${l.candidateType||"?"}` : "?";
+          const rp = r ? `${r.protocol||"?"}/${r.candidateType||"?"}` : "?";
+          $("stPair").textContent = `${lp} ↔ ${rp}`;
+        } else {
+          $("stPair").textContent = "—";
+        }
+
+        $("stTxV").textContent = `${fmtKbps(txVbps)} • pkts ${outV?.packetsSent ?? "—"} • lost ${outV?.packetsLost ?? "—"}`;
+        $("stRxV").textContent = `${fmtKbps(rxVbps)} • pkts ${inV?.packetsReceived ?? "—"} • lost ${inV?.packetsLost ?? "—"}`;
+        $("stTxA").textContent = `${fmtKbps(txAbps)} • pkts ${outA?.packetsSent ?? "—"} • lost ${outA?.packetsLost ?? "—"}`;
+        $("stRxA").textContent = `${fmtKbps(rxAbps)} • pkts ${inA?.packetsReceived ?? "—"} • lost ${inA?.packetsLost ?? "—"}`;
+        $("stRtt").textContent = (rtt!=null) ? `${(rtt*1000).toFixed(1)} ms` : "—";
+        $("stJit").textContent = (jitter!=null) ? `${(jitter*1000).toFixed(1)} ms` : "—";
+        $("stAvail").textContent = (availOut!=null) ? fmtKbps(availOut) : "—";
+      }catch{}
+    }, 900);
+  }
+
+  function stopStatsLoop(){
+    if(statsTimer) clearInterval(statsTimer);
+    statsTimer = null;
+  }
+  
+
+  // ---------------- QR (multi-chunk) handshake ----------------
+  // SDP blobs can be big; a single QR often can't hold it. We chunk + animate.
+  // Encoding: BAZQR1/<id>/<tot>/<idx>/<flags>:<payload>
+  // flags: 'g' if gzip, '-' otherwise.
+  const QR = (() => {
+    function make(typeNumber, errorCorrectionLevel) { return QRCode(typeNumber, errorCorrectionLevel); }
+
+    function QRCode(typeNumber, errorCorrectionLevel) {
+      const PAD0 = 0xEC, PAD1 = 0x11;
+      const _typeNumber = typeNumber;
+      const _errorCorrectionLevel = errorCorrectionLevel;
+      let _modules = null;
+      let _moduleCount = 0;
+      let _dataList = [];
+
+      function utf8Bytes(str){ return new TextEncoder().encode(str); }
+      function QR8bitByte(data){
+        const _data = utf8Bytes(data);
+        return { getMode:()=>4, getLength:()=>_data.length, write:(buffer)=>{ for(let i=0;i<_data.length;i++) buffer.put(_data[i],8); } };
+      }
+      function BitBuffer(){
+        let _buffer=[], _length=0;
+        return {
+          getBuffer:()=>_buffer,
+          put:(num,len)=>{ for(let i=0;i<len;i++) this.putBit(((num >>> (len-i-1)) & 1)===1); },
+          putBit:(bit)=>{
+            const bufIndex = Math.floor(_length/8);
+            if(_buffer.length <= bufIndex) _buffer.push(0);
+            if(bit) _buffer[bufIndex] |= (0x80 >>> (_length % 8));
+            _length++;
+          },
+          getLengthInBits:()=>_length
+        };
+      }
+
+      // GF(256)
+      const EXP=new Array(512), LOG=new Array(256);
+      (function(){
+        let x=1;
+        for(let i=0;i<256;i++){
+          EXP[i]=x; LOG[x]=i;
+          x <<= 1;
+          if(x & 0x100) x ^= 0x11d;
+        }
+        for(let i=256;i<512;i++) EXP[i]=EXP[i-256];
+      })();
+      function gfMul(a,b){ if(a===0||b===0) return 0; return EXP[LOG[a]+LOG[b]]; }
+      function Poly(num, shift){
+        let _num=num.slice();
+        for(let i=0;i<shift;i++) _num.push(0);
+        return {
+          getLength:()=>_num.length,
+          get:(i)=>_num[i],
+          mul:(e)=>{
+            const out=new Array(_num.length+e.getLength()-1).fill(0);
+            for(let i=0;i<_num.length;i++) for(let j=0;j<e.getLength();j++) out[i+j] ^= gfMul(_num[i], e.get(j));
+            return Poly(out,0);
+          },
+          mod:(e)=>{
+            if(this.getLength()-e.getLength()<0) return this;
+            const ratio = LOG[this.get(0)] - LOG[e.get(0)];
+            const out=_num.slice();
+            for(let i=0;i<e.getLength();i++) out[i] ^= EXP[LOG[e.get(i)] + ratio];
+            return Poly(out,0).mod(e);
+          }
+        };
+      }
+      function rsGeneratorPoly(ecLen){
+        let poly=Poly([1],0);
+        for(let i=0;i<ecLen;i++) poly = poly.mul(Poly([1,EXP[i]],0));
+        return poly;
+      }
+
+      const EC_LEVELS={L:1,M:0,Q:3,H:2};
+      function getBCHDigit(data){ let digit=0; while(data!==0){ digit++; data >>>=1; } return digit; }
+      function getBCHTypeInfo(data){
+        let d = data << 10;
+        const g = 0b10100110111;
+        while(getBCHDigit(d)-getBCHDigit(g)>=0) d ^= (g << (getBCHDigit(d)-getBCHDigit(g)));
+        return ((data<<10)|d) ^ 0b101010000010010;
+      }
+      function getPatternPosition(tn){
+        const table=[[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54]];
+        return table[tn] || table[10];
+      }
+      function getMask(mp,i,j){
+        switch(mp){
+          case 0:return (i+j)%2===0;
+          case 1:return i%2===0;
+          case 2:return j%3===0;
+          case 3:return (i+j)%3===0;
+          case 4:return (Math.floor(i/2)+Math.floor(j/3))%2===0;
+          case 5:return ((i*j)%2)+((i*j)%3)===0;
+          case 6:return (((i*j)%2)+((i*j)%3))%2===0;
+          case 7:return (((i+j)%2)+((i*j)%3))%2===0;
+          default:return false;
+        }
+      }
+
+      function setupPositionProbePattern(row,col){
+        for(let r=-1;r<=7;r++){
+          if(row+r<=-1||_moduleCount<=row+r) continue;
+          for(let c=-1;c<=7;c++){
+            if(col+c<=-1||_moduleCount<=col+c) continue;
+            if((0<=r&&r<=6&&(c===0||c===6))||(0<=c&&c<=6&&(r===0||r===6))||(2<=r&&r<=4&&2<=c&&c<=4)) _modules[row+r][col+c]=true;
+            else _modules[row+r][col+c]=false;
+          }
+        }
+      }
+      function setupTimingPattern(){
+        for(let i=8;i<_moduleCount-8;i++){
+          if(_modules[i][6]===null) _modules[i][6]=(i%2===0);
+          if(_modules[6][i]===null) _modules[6][i]=(i%2===0);
+        }
+      }
+      function setupPositionAdjustPattern(){
+        const pos=getPatternPosition(_typeNumber);
+        for(let i=0;i<pos.length;i++){
+          for(let j=0;j<pos.length;j++){
+            const row=pos[i], col=pos[j];
+            if(_modules[row][col]!==null) continue;
+            for(let r=-2;r<=2;r++){
+              for(let c=-2;c<=2;c++){
+                if(r===-2||r===2||c===-2||c===2||(r===0&&c===0)) _modules[row+r][col+c]=true;
+                else _modules[row+r][col+c]=false;
+              }
+            }
+          }
+        }
+      }
+      function setupTypeInfo(test, maskPattern){
+        const data=(EC_LEVELS[_errorCorrectionLevel]<<3)|maskPattern;
+        const bits=getBCHTypeInfo(data);
+        for(let i=0;i<15;i++){
+          const mod=(!test && ((bits>>i)&1)===1);
+          if(i<6) _modules[i][8]=mod;
+          else if(i<8) _modules[i+1][8]=mod;
+          else _modules[_moduleCount-15+i][8]=mod;
+
+          if(i<8) _modules[8][_moduleCount-i-1]=mod;
+          else if(i<9) _modules[8][15-i-1+1]=mod;
+          else _modules[8][15-i-1]=mod;
+        }
+        _modules[_moduleCount-8][8]=(!test);
+      }
+      function mapData(data, maskPattern){
+        let inc=-1, row=_moduleCount-1, bitIndex=7, byteIndex=0;
+        for(let col=_moduleCount-1;col>0;col-=2){
+          if(col===6) col--;
+          while(true){
+            for(let c=0;c<2;c++){
+              if(_modules[row][col-c]===null){
+                let dark=false;
+                if(byteIndex < data.length) dark = ((data[byteIndex]>>>bitIndex)&1)===1;
+                const mask=getMask(maskPattern,row,col-c);
+                _modules[row][col-c]= mask ? !dark : dark;
+                bitIndex--;
+                if(bitIndex===-1){ byteIndex++; bitIndex=7; }
+              }
+            }
+            row += inc;
+            if(row<0||_moduleCount<=row){ row -= inc; inc = -inc; break; }
+          }
+        }
+      }
+
+      const RS_BLOCK_TABLE_L={
+        1:[{totalCount:26,dataCount:19}],
+        2:[{totalCount:44,dataCount:34}],
+        3:[{totalCount:70,dataCount:55}],
+        4:[{totalCount:100,dataCount:80}],
+        5:[{totalCount:134,dataCount:108}],
+        6:[{totalCount:172,dataCount:136}],
+        7:[{totalCount:196,dataCount:156}],
+        8:[{totalCount:242,dataCount:194}],
+        9:[{totalCount:292,dataCount:232}],
+        10:[{totalCount:346,dataCount:274}],
+      };
+      function getRSBlocks(typeNumber, ecl){
+        if(ecl!=="L") throw new Error("Only EC level L supported in this compact QR build");
+        return RS_BLOCK_TABLE_L[Math.min(Math.max(typeNumber,1),10)];
+      }
+      function createData(typeNumber, ecl, dataList){
+        const buffer=BitBuffer();
+        for(const d of dataList){
+          buffer.put(d.getMode(),4);
+          const lenBits = (typeNumber<=9)?8:16;
+          buffer.put(d.getLength(),lenBits);
+          d.write(buffer);
+        }
+        const totalDataCount=getRSBlocks(typeNumber,ecl).reduce((a,b)=>a+b.dataCount,0);
+        if(buffer.getLengthInBits()+4 <= totalDataCount*8) buffer.put(0,4);
+        while(buffer.getLengthInBits()%8!==0) buffer.putBit(false);
+        while(true){
+          if(buffer.getLengthInBits()>=totalDataCount*8) break;
+          buffer.put(PAD0,8);
+          if(buffer.getLengthInBits()>=totalDataCount*8) break;
+          buffer.put(PAD1,8);
+        }
+        return createBytes(buffer, getRSBlocks(typeNumber,ecl));
+      }
+      function createBytes(buffer, rsBlocks){
+        let offset=0, maxDc=0, maxEc=0;
+        const dcdata=[], ecdata=[];
+        for(const rb of rsBlocks){
+          const dcCount=rb.dataCount;
+          const ecCount=rb.totalCount-dcCount;
+          maxDc=Math.max(maxDc,dcCount);
+          maxEc=Math.max(maxEc,ecCount);
+          const dc=new Array(dcCount);
+          for(let i=0;i<dcCount;i++) dc[i]=0xff & buffer.getBuffer()[i+offset];
+          offset += dcCount;
+          dcdata.push(dc);
+
+          const rsPoly = rsGeneratorPoly(ecCount);
+          const rawPoly = Poly(dc, ecCount);
+          const modPoly = rawPoly.mod(rsPoly);
+          const ec=new Array(ecCount);
+          for(let i=0;i<ecCount;i++){
+            const modIndex = i + modPoly.getLength() - ecCount;
+            ec[i] = (modIndex>=0) ? modPoly.get(modIndex) : 0;
+          }
+          ecdata.push(ec);
+        }
+        const totalCodeCount = rsBlocks.reduce((a,b)=>a+b.totalCount,0);
+        const data=new Array(totalCodeCount);
+        let index=0;
+        for(let i=0;i<maxDc;i++) for(let r=0;r<rsBlocks.length;r++) if(i<dcdata[r].length) data[index++]=dcdata[r][i];
+        for(let i=0;i<maxEc;i++) for(let r=0;r<rsBlocks.length;r++) if(i<ecdata[r].length) data[index++]=ecdata[r][i];
+        return data;
+      }
+
+      function makeImpl(){
+        _moduleCount = _typeNumber*4 + 17;
+        _modules=new Array(_moduleCount);
+        for(let row=0;row<_moduleCount;row++) _modules[row]=new Array(_moduleCount).fill(null);
+        setupPositionProbePattern(0,0);
+        setupPositionProbePattern(_moduleCount-7,0);
+        setupPositionProbePattern(0,_moduleCount-7);
+        setupTimingPattern();
+        setupPositionAdjustPattern();
+
+        const data=createData(_typeNumber,_errorCorrectionLevel,_dataList);
+        const mask=0; // compact build: fixed mask 0 for stability
+        setupTypeInfo(false, mask);
+        mapData(data, mask);
+      }
+
+      return {
+        addData:(data)=>{ _dataList.push(QR8bitByte(data)); },
+        make:()=>{ if(_modules===null) makeImpl(); },
+        isDark:(r,c)=>_modules[r][c],
+        getModuleCount:()=>_moduleCount
+      };
+    }
+
+    function renderToCanvas(text, canvas, scale=6, margin=2){
+      const len=text.length;
+      let type=4;
+      if(len>200) type=6;
+      if(len>350) type=8;
+      if(len>520) type=10;
+      const qr=make(type,"L");
+      qr.addData(text);
+      qr.make();
+      const count=qr.getModuleCount();
+      const size=(count+margin*2)*scale;
+      canvas.width=size; canvas.height=size;
+      const ctx=canvas.getContext("2d");
+      ctx.fillStyle="#fff"; ctx.fillRect(0,0,size,size);
+      ctx.fillStyle="#000";
+      for(let r=0;r<count;r++) for(let c=0;c<count;c++) if(qr.isDark(r,c)) ctx.fillRect((c+margin)*scale,(r+margin)*scale,scale,scale);
+    }
+
+    return { renderToCanvas };
+  })();
+
+  function b64urlEncode(bytes){
+    let bin="";
+    const chunk=0x8000;
+    for(let i=0;i<bytes.length;i+=chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+chunk));
+    return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }
+  function b64urlDecode(str){
+    const s=str.replace(/-/g,'+').replace(/_/g,'/');
+    const pad = s.length%4 ? "=".repeat(4-(s.length%4)) : "";
+    const bin=atob(s+pad);
+    const out=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+    return out;
+  }
+  async function gzipMaybe(bytes){
+    if(!("CompressionStream" in window)) return {bytes, flag:"-"};
+    try{
+      const cs=new CompressionStream("gzip");
+      const w=cs.writable.getWriter();
+      await w.write(bytes); await w.close();
+      const ab=await new Response(cs.readable).arrayBuffer();
+      return {bytes:new Uint8Array(ab), flag:"g"};
+    }catch{
+      return {bytes, flag:"-"};
+    }
+  }
+  async function gunzipMaybe(bytes, flag){
+    if(flag!=="g") return bytes;
+    if(!("DecompressionStream" in window)) return bytes;
+    try{
+      const ds=new DecompressionStream("gzip");
+      const w=ds.writable.getWriter();
+      await w.write(bytes); await w.close();
+      const ab=await new Response(ds.readable).arrayBuffer();
+      return new Uint8Array(ab);
+    }catch{
+      return bytes;
+    }
+  }
+
+  async function packToQrChunks(text){
+    const raw=new TextEncoder().encode(text);
+    const g=await gzipMaybe(raw);
+    const b64=b64urlEncode(g.bytes);
+
+    const id = (crypto?.getRandomValues ? Array.from(crypto.getRandomValues(new Uint8Array(6))) : Array.from({length:6},()=>Math.floor(Math.random()*256)))
+      .map(x=>x.toString(16).padStart(2,"0")).join("");
+
+    const maxChunk=180; // keep within QR v10-L capacity (conservative)
+    const chunks=[];
+    for(let i=0;i<b64.length;i+=maxChunk) chunks.push(b64.slice(i,i+maxChunk));
+    const tot=chunks.length;
+    const frames=chunks.map((payload, idx)=>`BAZQR1/${id}/${tot}/${idx+1}/${g.flag}:${payload}`);
+    return {id, tot, frames};
+  }
+
+  const qrState = {
+    showFrames: [], showIndex: 0, showTimer: null,
+    scanStream: null, scanTimer: null, scanTarget: null,
+    scanId: null, scanTot: 0, scanFlag: "-", scanParts: new Map(),
+  };
+
+  function openQrModal(mode){
+    $("qrModal").style.display="flex";
+    $("qrShowPane").style.display = (mode==="show") ? "block" : "none";
+    $("qrScanPane").style.display = (mode==="scan") ? "block" : "none";
+  }
+  function stopQrShow(){
+    if(qrState.showTimer){ clearInterval(qrState.showTimer); qrState.showTimer=null; }
+    $("qrPlay").textContent="Auto";
+  }
+  function stopQrScan(){
+    if(qrState.scanTimer){ clearInterval(qrState.scanTimer); qrState.scanTimer=null; }
+    try{ if(qrState.scanStream) qrState.scanStream.getTracks().forEach(t=>t.stop()); }catch{}
+    qrState.scanStream=null;
+    $("qrVideo").srcObject=null;
+  }
+  function closeQrModal(){
+    stopQrShow(); stopQrScan();
+    $("qrModal").style.display="none";
+  }
+  function renderQrFrame(){
+    const f=qrState.showFrames[qrState.showIndex];
+    if(!f) return;
+    $("qrChunk").textContent = `${qrState.showIndex+1}/${qrState.showFrames.length}`;
+    $("qrId").textContent = (f.match(/^BAZQR1\/([^\/]+)/)?.[1]) || "—";
+    QR.renderToCanvas(f, $("qrCanvas"), 6, 2);
+  }
+  function startQrShowAuto(){
+    stopQrShow();
+    $("qrPlay").textContent="Stop";
+    qrState.showTimer=setInterval(()=>{
+      qrState.showIndex = (qrState.showIndex+1) % qrState.showFrames.length;
+      renderQrFrame();
+    }, 450);
+  }
+  async function showLocalAsQr(){
+    const txt=($("localSDP").value||"").trim();
+    if(!txt){ log("No Local JSON to show"); return; }
+    const pack=await packToQrChunks(txt);
+    qrState.showFrames=pack.frames;
+    qrState.showIndex=0;
+    $("qrHelp").textContent = (pack.frames.length===1)
+      ? "Show this QR to the other phone, then scan to fill Remote JSON."
+      : `Multi‑QR (${pack.frames.length} chunks). Keep the other phone scanning while this cycles.`;
+    openQrModal("show");
+    renderQrFrame();
+    startQrShowAuto();
+  }
+
+  async function startQrScanInto(textareaEl){
+    if(!("mediaDevices" in navigator) || !navigator.mediaDevices.getUserMedia){
+      log("No camera access in this browser."); return;
+    }
+    if(!("BarcodeDetector" in window)){
+      $("qrHelp").textContent = "BarcodeDetector not available. Use Chrome Android or a compatible browser.";
+      openQrModal("scan");
+      $("qrScanStatus").textContent = "no BarcodeDetector";
+      return;
+    }
+    qrState.scanTarget=textareaEl;
+    qrState.scanId=null; qrState.scanTot=0; qrState.scanFlag="-"; qrState.scanParts=new Map();
+    $("qrScanId").textContent="—";
+    $("qrTot").textContent="0";
+    $("qrGot").textContent="0";
+    $("qrScanStatus").textContent="starting…";
+    $("qrHelp").textContent="Grant camera permission, then point at the QR. Keep scanning for all chunks.";
+    openQrModal("scan");
+
+    const video=$("qrVideo");
+    try{
+      qrState.scanStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      video.srcObject = qrState.scanStream;
+    }catch(e){
+      $("qrScanStatus").textContent="camera denied";
+      log("QR scan camera error: "+(e.message||String(e)));
+      return;
+    }
+    const detector = new BarcodeDetector({formats:["qr_code"]});
+    qrState.scanTimer=setInterval(async ()=>{
+      try{
+        const barcodes = await detector.detect(video);
+        if(!barcodes || !barcodes.length) return;
+        const raw = String(barcodes[0].rawValue || "");
+        if(!raw.startsWith("BAZQR1/")) return;
+        const m = raw.match(/^BAZQR1\/([^\/]+)\/(\d+)\/(\d+)\/([g\-]):(.+)$/);
+        if(!m) return;
+        const id=m[1], tot=Number(m[2]), idx=Number(m[3]), flag=m[4], payload=m[5];
+        if(qrState.scanId && id !== qrState.scanId) return;
+        qrState.scanId=id; qrState.scanTot=tot; qrState.scanFlag=flag;
+        $("qrScanId").textContent=id;
+        $("qrTot").textContent=String(tot);
+
+        if(!qrState.scanParts.has(idx)){
+          qrState.scanParts.set(idx, payload);
+          $("qrGot").textContent=String(qrState.scanParts.size);
+          $("qrScanStatus").textContent="receiving…";
+          log(`QR chunk ${idx}/${tot} received`, true);
+        }
+        if(qrState.scanParts.size === tot){
+          $("qrScanStatus").textContent="assembling…";
+          let b64="";
+          for(let i=1;i<=tot;i++) b64 += (qrState.scanParts.get(i) || "");
+          const packed=b64urlDecode(b64);
+          const unz=await gunzipMaybe(packed, flag);
+          const json=new TextDecoder().decode(unz);
+          textareaEl.value=json;
+          $("qrScanStatus").textContent="done";
+          log("QR handshake payload assembled", true);
+          setTimeout(()=>closeQrModal(), 450);
+        }
+      }catch{}
+    }, 140);
+  }
+
+function setRtcState(s){
+    $("rtcState").textContent = s;
+    $("rtcState").className = (s==="connected") ? "ok" : (s==="failed" ? "bad" : "warn");
+  }
+  function setIceState(s){ $("iceState").textContent = s; }
+  function setDcState(s){
+    $("dcState").textContent = s;
+    $("dcState").className = (s==="open") ? "ok" : (s==="closed" ? "bad" : "warn");
+  }
+  function setMediaState(s){
+    $("mediaState").textContent = s;
+    $("mediaState").className = (s==="on") ? "ok" : "warn";
+  }
+
+  function rtcConfig(){
+    const stun = $("stun").value;
+    const iceServers = [];
+    if(stun==="google") iceServers.push({urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]});
+    if(stun==="twilio") iceServers.push({urls:["stun:global.stun.twilio.com:3478"]});
+    return {iceServers};
+  }
+
+  function clearSDP(){
+    $("localSDP").value = "";
+    $("remoteSDP").value = "";
+    $("copyLocal").disabled = true;
+    $("showLocalQR").disabled = true;
+  }
+
+  function enableButtonsForInit(){
+    $("startMedia").disabled = false;
+    $("stopMedia").disabled = false;
+    $("hangup").disabled = false;
+
+    const role = $("role").value;
+    $("createOffer").disabled = (role !== "a");
+    $("createAnswer").disabled = (role !== "b");
+    $("setRemote").disabled = false;
+  }
+
+  function disableButtonsForHangup(){
+    $("startMedia").disabled = true;
+    $("stopMedia").disabled = true;
+    $("hangup").disabled = true;
+    $("createOffer").disabled = true;
+    $("createAnswer").disabled = true;
+    $("setRemote").disabled = true;
+    $("send").disabled = true;
+    $("sendBurst").disabled = true;
+    $("copyLocal").disabled = true;
+  }
+
+  function wirePcEvents(){
+    pc.onconnectionstatechange = ()=>{
+      const s = pc.connectionState || "unknown";
+      setRtcState(s);
+      log("pc.connectionState → " + s, true);
+    };
+    pc.oniceconnectionstatechange = ()=>{
+      const s = pc.iceConnectionState || "unknown";
+      setIceState(s);
+      log("pc.iceConnectionState → " + s, true);
+    };
+    pc.onicegatheringstatechange = ()=>{
+      log("pc.iceGatheringState → " + (pc.iceGatheringState||"unknown"), true);
+    };
+    pc.onicecandidate = (ev)=>{
+      if(ev.candidate){
+        candN++;
+        $("candCount").textContent = String(candN);
+        // Keep logs light: show candidate type and protocol when possible
+        try{
+          const c = ev.candidate.candidate || "";
+          let typ = "cand";
+          const mt = c.match(/ typ (host|srflx|relay) /);
+          if(mt) typ = mt[1];
+          const pr = c.match(/ udp | tcp /) ? (c.includes(" tcp ") ? "tcp" : "udp") : "?";
+          log(`icecandidate +1 (${typ}/${pr})`, true);
+        }catch{}
+      } else {
+        log("icecandidate: null (gathering complete)", true);
+      }
+    };
+
+    pc.ontrack = (ev)=>{
+      log("remote track received", true);
+      const [stream] = ev.streams;
+      if(stream) remoteV.srcObject = stream;
+    };
+    pc.ondatachannel = (ev)=>{
+      log("data channel received", true);
+      dc = ev.channel;
+      wireDcEvents();
+    };
+  }
+
+  function wireDcEvents(){
+    if(!dc) return;
+    dc.onopen = ()=>{
+      setDcState("open");
+      $("send").disabled = false;
+      $("sendBurst").disabled = false;
+      log("dc.open", true);
+    };
+    dc.onclose = ()=>{
+      setDcState("closed");
+      $("send").disabled = true;
+      $("sendBurst").disabled = true;
+      log("dc.closed", true);
+    };
+    dc.onerror = (e)=>{
+      setDcState("error");
+      log("dc.error: " + (e.message||String(e)));
+    };
+    dc.onmessage = (ev)=>{
+      const data = String(ev.data||"");
+      try{
+        const obj = JSON.parse(data);
+        if(obj && obj.t==="mono" && obj.s){ applyMonoState(obj.s); return; }
+        if(obj && obj.t==="msg"){ log("RX: " + String(obj.m)); return; }
+      }catch{}
+      log("RX: " + data);
+    };
+    setDcState(dc.readyState || "connecting");
+  }
+
+  async function initTRX(){
+    if(pc) return;
+    clearSDP();
+    candN = 0;
+    $("candCount").textContent = "0";
+    log("Init TRX…", true);
+
+    pc = new RTCPeerConnection(rtcConfig());
+    wirePcEvents();
+    startStatsLoop();
+
+    if($("role").value === "a"){
+      dc = pc.createDataChannel("baz", {ordered:true});
+      wireDcEvents();
+    }
+
+    enableButtonsForInit();
+    setRtcState("new");
+    setIceState("new");
+    setDcState(dc ? (dc.readyState || "connecting") : "—");
+  }
+
+  async function startMedia(){
+    if(!pc){
+      log("Init TRX first.");
+      return;
+    }
+    if(localStream){
+      log("media already on", true);
+      return;
+    }
+
+    const cam = $("camMode").value;
+    const mic = $("micMode").value;
+    const overlayMode = $("overlayMode").value;
+
+    const constraints = {
+      audio: (mic==="on") ? {echoCancellation:true, noiseSuppression:true, autoGainControl:true} : false,
+      video: (cam==="none") ? false : {facingMode: (cam==="env" ? "environment" : "user")}
+    };
+
+    try{
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      const vTrack = localStream.getVideoTracks()[0] || null;
+      const aTrack = localStream.getAudioTracks()[0] || null;
+
+      if(vTrack && overlayMode === "on"){
+        const ov = buildOverlayStream(localStream);
+        if(ov && ov.getVideoTracks().length){
+          overlayStream = ov;
+          sendStream = new MediaStream();
+          sendStream.addTrack(overlayStream.getVideoTracks()[0]);
+          if(aTrack) sendStream.addTrack(aTrack);
+          localV.srcObject = sendStream;
+          log("overlay enabled: LIVE camera → canvas → WebRTC", true);
+        } else {
+          sendStream = localStream;
+          localV.srcObject = localStream;
+          log("overlay failed; using raw camera", true);
+        }
+      } else {
+        sendStream = localStream;
+        localV.srcObject = localStream;
+        log("using raw camera (no overlay)", true);
+      }
+
+      attachSendTracks(sendStream);
+
+      setMediaState("on");
+      log("media started", true);
+    }catch(e){
+      setMediaState("error");
+      log("media error: " + (e.message||String(e)));
+    }
+  }
+
+  async function stopMedia(){
+    try{
+      if(sendStream){
+        try{ sendStream.getTracks().forEach(t=>t.stop()); }catch{}
+        sendStream = null;
+      }
+      stopOverlay();
+      if(localStream){
+        try{ localStream.getTracks().forEach(t=>t.stop()); }catch{}
+        localStream = null;
+      }
+    }catch{}
+    localV.srcObject = null;
+    setMediaState("off");
+    log("media stopped", true);
+  }
+
+  function waitForIceComplete(){
+    return new Promise((resolve)=>{
+      if(!pc) return resolve();
+      const timeoutMs = Number($("iceTimeout")?.value || 6000);
+      let done = false;
+
+      const finish = (why)=>{
+        if(done) return;
+        done = true;
+        try{ pc.removeEventListener("icegatheringstatechange", onState); }catch{}
+        try{ pc.removeEventListener("icecandidate", onCand); }catch{}
+        if(why) log(why, true);
+        resolve();
+      };
+
+      const onState = ()=>{
+        if(pc.iceGatheringState === "complete"){
+          finish("ICE gathering complete");
+        }
+      };
+
+      const onCand = (ev)=>{
+        if(!ev.candidate){
+          finish("ICE gathering complete (null candidate)");
+        }
+      };
+
+      if(pc.iceGatheringState === "complete"){
+        return finish("ICE already complete");
+      }
+
+      pc.addEventListener("icegatheringstatechange", onState);
+      pc.addEventListener("icecandidate", onCand);
+
+      setTimeout(()=>{
+        // Some networks never reach "complete" quickly; don't hang the UI.
+        finish("ICE gather timeout → exporting partial ICE (should still work on many networks)");
+      }, timeoutMs);
+    });
+  }
+
+  async function createOffer(){
+    if(!pc) return;
+    try{
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      log("local offer set; gathering ICE…", true);
+      await waitForIceComplete();
+      const blob = {type: pc.localDescription.type, sdp: pc.localDescription.sdp};
+      $("localSDP").value = JSON.stringify(blob);
+      $("copyLocal").disabled = false;
+      $("showLocalQR").disabled = false;
+      log("Offer ready (copy Local JSON)", true);
+    }catch(e){
+      log("createOffer error: " + (e.message||String(e)));
+    }
+  }
+
+  async function setRemote(){
+    if(!pc) return;
+    const txt = ($("remoteSDP").value||"").trim();
+    if(!txt){ log("paste Remote JSON first"); return; }
+    try{
+      const blob = parseJsonLoose(txt);
+      await pc.setRemoteDescription(blob);
+      log("remote description set (" + blob.type + ")", true);
+      if($("role").value === "b"){
+        $("createAnswer").disabled = false;
+      }
+    }catch(e){
+      log("setRemote error: " + (e.message||String(e)));
+    }
+  }
+
+  async function createAnswer(){
+    if(!pc) return;
+    try{
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      log("local answer set; gathering ICE…", true);
+      await waitForIceComplete();
+      const blob = {type: pc.localDescription.type, sdp: pc.localDescription.sdp};
+      $("localSDP").value = JSON.stringify(blob);
+      $("copyLocal").disabled = false;
+      $("showLocalQR").disabled = false;
+      log("Answer ready (copy Local JSON)", true);
+    }catch(e){
+      log("createAnswer error: " + (e.message||String(e)));
+    }
+  }
+
+  async function hangup(){
+    try{ await stopMedia(); }catch{}
+    try{ stopStatsLoop(); }catch{}
+    try{
+      if(dc){ try{ dc.close(); }catch{} }
+      dc = null;
+      if(pc){ try{ pc.close(); }catch{} }
+      pc = null;
+    }catch{}
+    remoteV.srcObject = null;
+    clearSDP();
+    disableButtonsForHangup();
+    setRtcState("idle");
+    setIceState("—");
+    setDcState("—");
+    setMediaState("off");
+    log("hung up", true);
+  }
+
+  function sendMsg(text){
+    if(!dc || dc.readyState!=="open"){ log("data channel not open"); return; }
+    const payload = JSON.stringify({t:"msg", m:String(text)});
+    dc.send(payload);
+    log("TX: " + String(text));
+  }
+
+  function poleBurst(){
+    const t = Math.floor(Date.now()/250);
+    const seed = (t ^ 0x9e3779b9) >>> 0;
+    let x = seed;
+    const bits = [];
+    for(let i=0;i<256;i++){
+      x ^= (x << 13) >>> 0;
+      x ^= (x >> 17) >>> 0;
+      x ^= (x << 5) >>> 0;
+      bits.push((x & 1) ? "1":"0");
+    }
+    return "POLEBURST t=" + t + " " + bits.join("");
+  }
+
+  $("init").onclick = initTRX;
+  $("hangup").onclick = hangup;
+  $("startMedia").onclick = startMedia;
+  $("stopMedia").onclick = stopMedia;
+
+  $("createOffer").onclick = createOffer;
+  $("createAnswer").onclick = createAnswer;
+  $("setRemote").onclick = setRemote;
+
+  $("clearRemote").onclick = ()=>{ $("remoteSDP").value=""; };
+
+  $("copyLocal").onclick = async ()=>{
+    const txt = $("localSDP").value;
+    if(!txt) return;
+    try{
+      await navigator.clipboard.writeText(txt);
+      log("copied Local JSON", true);
+    }catch(e){
+      $("localSDP").focus();
+      $("localSDP").select();
+      log("clipboard blocked; selected text instead", true);
+    }
+
+  $("showLocalQR").onclick = ()=>{ showLocalAsQr(); };
+  $("scanRemoteQR").onclick = ()=>{ startQrScanInto($("remoteSDP")); };
+
+  $("qrClose").onclick = ()=> closeQrModal();
+  $("qrPrev").onclick = ()=>{
+    if(!qrState.showFrames.length) return;
+    stopQrShow();
+    qrState.showIndex = (qrState.showIndex - 1 + qrState.showFrames.length) % qrState.showFrames.length;
+    renderQrFrame();
+  };
+  $("qrNext").onclick = ()=>{
+    if(!qrState.showFrames.length) return;
+    stopQrShow();
+    qrState.showIndex = (qrState.showIndex + 1) % qrState.showFrames.length;
+    renderQrFrame();
+  };
+  $("qrPlay").onclick = ()=>{
+    if(!qrState.showFrames.length) return;
+    if(qrState.showTimer) stopQrShow(); else startQrShowAuto();
+  };
+  };
+
+  $("send").onclick = ()=>{
+    const m = ($("msg").value||"").trim();
+    if(!m) return;
+    sendMsg(m);
+    $("msg").value="";
+  };
+  $("sendBurst").onclick = ()=> sendMsg(poleBurst());
+
+  disableButtonsForHangup();
+  setRtcState("idle");
+  setIceState("—");
+  setDcState("—");
+  setMediaState("off");
+
+  // ---------------- Monograph (pixel/photon emitter field) ----------------
+  const mono = {
+    running:false, raf:0, last:0,
+    N:128, poles:[], sync:"off", tilt:false,
+    txTimer:0
+  };
+
+  function setActiveTab(which){
+    const trx = $("viewTRX"), monoV = $("viewMONO");
+    if(which==="mono"){
+      trx.style.display="none";
+      monoV.style.display="block";
+      $("tabTrx").classList.remove("active");
+      $("tabMono").classList.add("active");
+    }else{
+      monoV.style.display="none";
+      trx.style.display="block";
+      $("tabMono").classList.remove("active");
+      $("tabTrx").classList.add("active");
+    }
+  }
+
+  function updateSyncPill(){
+    const s = $("monoSync")?.value || "off";
+    $("syncState").textContent = s;
+    mono.sync = s;
+  }
+
+  function monoResize(){
+    const c = $("monoCanvas");
+    const rect = c.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+    c.width = Math.floor(rect.width * dpr);
+    c.height = Math.floor(rect.height * dpr);
+  }
+
+  function monoRebuildPoles(){
+    const k = Math.max(3, parseInt($("monoPoles").value||"3",10));
+    mono.poles = [];
+    for(let i=0;i<k;i++){
+      mono.poles.push({
+        x: Math.random(), y: Math.random(),
+        ph: Math.random()*Math.PI*2,
+        w: (0.004 + 0.006*Math.random()) * (i%2?1:-1),
+        a: 0.85 + 0.35*Math.random()
+      });
+    }
+  }
+
+  function fieldAt(u,v){
+    // u,v in [0,1]
+    let s0=0, s1=0, s2=0;
+    for(let i=0;i<mono.poles.length;i++){
+      const p=mono.poles[i];
+      const dx=u-p.x, dy=v-p.y;
+      const r=Math.sqrt(dx*dx+dy*dy) + 1e-3;
+      const k = 10.0; // spatial frequency
+      const t = p.ph + k*r;
+      const w = p.a/(1.0 + 4.0*r);
+      s0 += w*Math.sin(t);
+      s1 += w*Math.cos(t*0.9 + 0.7*i);
+      s2 += w*Math.sin(t*1.1 - 0.4*i);
+    }
+    return [s0,s1,s2];
+  }
+
+  function stepPoles(dt){
+    // Kuramoto-like coupling + slight drift => “3-pole minimum” chaos-ish
+    const P=mono.poles;
+    const K=1.8;
+    for(let i=0;i<P.length;i++){
+      let coup=0;
+      for(let j=0;j<P.length;j++){
+        if(i===j) continue;
+        coup += Math.sin(P[j].ph - P[i].ph);
+      }
+      P[i].ph += (P[i].w + (K/P.length)*coup) * (dt*60);
+      // drift by local gradient-ish
+      const vx = 0.08*Math.cos(P[i].ph*0.9 + i);
+      const vy = 0.08*Math.sin(P[i].ph*1.1 - i);
+      P[i].x = (P[i].x + vx*dt*0.08 + 1) % 1;
+      P[i].y = (P[i].y + vy*dt*0.08 + 1) % 1;
+    }
+  }
+
+  function drawMono(){
+    if(!mono.running) return;
+    const c = $("monoCanvas");
+    const ctx = c.getContext("2d", {alpha:false});
+    const W=c.width, H=c.height;
+    const N = mono.N;
+
+    const img = ctx.createImageData(N,N);
+    const d = img.data;
+
+    for(let y=0;y<N;y++){
+      const v = y/(N-1);
+      for(let x=0;x<N;x++){
+        const u = x/(N-1);
+        const f = fieldAt(u,v);
+        // squashing
+        const r = 0.5 + 0.5*Math.tanh(1.2*f[0]);
+        const g = 0.5 + 0.5*Math.tanh(1.2*f[1]);
+        const b = 0.5 + 0.5*Math.tanh(1.2*f[2]);
+        const i = 4*(y*N+x);
+        d[i+0] = Math.max(0,Math.min(255, Math.floor(255*r)));
+        d[i+1] = Math.max(0,Math.min(255, Math.floor(255*g)));
+        d[i+2] = Math.max(0,Math.min(255, Math.floor(255*b)));
+        d[i+3] = 255;
+      }
+    }
+
+    // scale to canvas
+    const off = document.createElement("canvas");
+    off.width=N; off.height=N;
+    off.getContext("2d", {alpha:false}).putImageData(img,0,0);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.clearRect(0,0,W,H);
+    ctx.drawImage(off, 0,0, W,H);
+
+    $("monoState").textContent = (mono.sync==="tx") ? "running (TX)" : (mono.sync==="rx" ? "running (RX)" : "running");
+  }
+
+  function monoLoop(ts){
+    if(!mono.running) return;
+    const t = ts || performance.now();
+    const dt = mono.last ? Math.min(0.05, (t-mono.last)/1000) : 0.016;
+    mono.last = t;
+
+    if(mono.sync !== "rx"){ stepPoles(dt); }
+    drawMono();
+
+    // TX: broadcast pole state at ~12Hz
+    if(mono.sync==="tx" && dc && dc.readyState==="open"){
+      if(!mono.txTimer || (t - mono.txTimer) > 80){
+        mono.txTimer = t;
+        try{
+          dc.send(JSON.stringify({t:"mono", s:{N:mono.N, poles:mono.poles}}));
+        }catch{}
+      }
+    }
+
+    mono.raf = requestAnimationFrame(monoLoop);
+  }
+
+  function monoStart(){
+    if(mono.running) return;
+    mono.running = true;
+    $("monoStart").disabled = true;
+    $("monoStop").disabled = false;
+    monoResize();
+    mono.N = Math.max(48, Math.min(256, parseInt($("monoRes").value||"128",10)));
+    if(!mono.poles || mono.poles.length<3) monoRebuildPoles();
+    mono.last = 0;
+    mono.raf = requestAnimationFrame(monoLoop);
+  }
+  function monoStop(){
+    mono.running = false;
+    $("monoStart").disabled = false;
+    $("monoStop").disabled = true;
+    if(mono.raf){ cancelAnimationFrame(mono.raf); mono.raf=0; }
+    $("monoState").textContent = "idle";
+  }
+  function monoToggleTilt(){
+    mono.tilt = !mono.tilt;
+    const wrap = $("monoTiltWrap");
+    if(mono.tilt) wrap.classList.add("tilt45"); else wrap.classList.remove("tilt45");
+  }
+  function monoFullscreen(){
+    const el = $("monoTiltWrap");
+    if(!document.fullscreenElement){
+      (el.requestFullscreen ? el.requestFullscreen() : $("monoCanvas").requestFullscreen?.()).catch(()=>{});
+    }else{
+      document.exitFullscreen?.().catch(()=>{});
+    }
+  }
+
+  function applyMonoState(s){
+    if(!s || mono.sync!=="rx") return;
+    if(typeof s.N === "number"){
+      mono.N = Math.max(48, Math.min(256, Math.floor(s.N)));
+      $("monoRes").value = String(mono.N);
+    }
+    if(Array.isArray(s.poles) && s.poles.length>=3){
+      mono.poles = s.poles.map(p=>({
+        x: (Number(p.x)||0)%1, y:(Number(p.y)||0)%1,
+        ph: Number(p.ph)||0, w: Number(p.w)||0,
+        a: Math.max(0.05, Math.min(2.5, Number(p.a)||1))
+      }));
+    }
+    if(!mono.running) monoStart();
+  }
+
+  function loadMonoText(){
+    const txt =
+`BAS‑Uni / origami‑QM screen monograph (on‑screen excerpt)
+
+Goal: treat the screen as a controllable emitter array and use multi‑pole operator dynamics to generate phase‑structured fields.
+
+• “Three‑pole minimum”: with ≥3 interacting poles, phase‑coupled feedback can destabilize simple periodic motion and produce rich, chaotic‑like textures.
+
+• Origami principle: geometry (fold/angle) sets a boundary condition. Here we expose a 45° tilt transform so two screens can be physically aligned under an optic fixture.
+
+• TRX link: when Sync=TX, the pole state broadcasts over the DataChannel. When Sync=RX, the other phone follows the same pole‑operator state, producing matched fields on both screens.
+
+Next: you can replace this excerpt with full text extracted from your PDFs and scroll it while the field runs underneath.`;
+    $("monoText").textContent = txt;
+  }
+
+  // Wire UI
+  $("tabTrx").onclick = ()=> setActiveTab("trx");
+  $("tabMono").onclick = ()=> setActiveTab("mono");
+
+  $("monoStart").onclick = ()=> monoStart();
+  $("monoStop").onclick = ()=> monoStop();
+  $("monoTilt").onclick = ()=> monoToggleTilt();
+  $("monoFull").onclick = ()=> monoFullscreen();
+  $("monoPoles").onchange = ()=> { monoRebuildPoles(); if(mono.running) drawMono(); };
+  $("monoRes").onchange = ()=> { mono.N = parseInt($("monoRes").value||"128",10); if(mono.running) drawMono(); };
+  $("monoSync").onchange = ()=> updateSyncPill();
+  $("monoLoadText").onclick = ()=> loadMonoText();
+  $("monoClearText").onclick = ()=> { $("monoText").textContent=""; };
+
+  window.addEventListener("resize", ()=>{ if(mono.running) monoResize(); });
+
+  updateSyncPill();
+
+  log("ready.", true);
+})();
+
+  $("qrModal").addEventListener("click", (e)=>{ if(e.target && e.target.id==="qrModal") closeQrModal(); });
+</script>
+</body>
+</html>

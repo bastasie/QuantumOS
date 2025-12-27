@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0b0b0b"/>
+<title>BAZ BioSignal Lab (PPG + ECG/EEG Import + Prime‑GLT Enhance)</title>
+<style>
+  :root{color-scheme:dark}
+  html,body{margin:0;height:100%;background:#070707;color:rgba(255,255,255,.92);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  *{box-sizing:border-box}
+  .wrap{max-width:1100px;margin:0 auto;padding:14px 12px 40px}
+  h1{margin:0 0 6px;font-size:18px;font-weight:950;letter-spacing:.2px}
+  p{margin:6px 0 0;opacity:.78;line-height:1.35}
+  .warn{color:#ffd37a}
+  .ok{color:#9dffb0}
+  .card{margin-top:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);
+    border-radius:18px;padding:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:12px;align-items:start}
+  @media(max-width:980px){.grid{grid-template-columns:1fr}}
+  input,button,select,textarea{
+    appearance:none;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.35);
+    color:rgba(255,255,255,.92);padding:10px 10px;border-radius:14px;font-weight:850;font-size:13px;outline:none;
+    -webkit-tap-highlight-color:transparent}
+  button{cursor:pointer}
+  button:active{transform:translateY(1px);background:rgba(255,255,255,.08)}
+  .pill{padding:7px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.05);font-size:12px;font-weight:900;opacity:.86;display:flex;gap:8px;align-items:center}
+  canvas{width:100%;height:auto;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:#000}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}
+  #log{max-height:220px;overflow:auto;border-radius:14px;border:1px solid rgba(255,255,255,.10);
+    padding:10px;background:rgba(0,0,0,.30);font-size:12px;line-height:1.35}
+  #vid{width:100%;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:#000;display:none}
+  .small{font-size:12px;opacity:.78;line-height:1.35}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BAZ BioSignal Lab</h1>
+  <p>
+    This app applies your “pick up signals + enhance them” idea to biosignals in a browser:
+    <b>camera PPG</b> (finger on camera/flash style) + <b>imported EEG/ECG</b> signals, enhanced via a <b>prime‑indexed complex denoiser</b> (Prime‑GLT‑style) plus deterministic preprocessing.
+    <span class="warn">Not medical advice; not a diagnostic tool.</span>
+  </p>
+
+  <div class="card small">
+    <b>Reality check (browser limits):</b>
+    You can’t read EEG/ECG “just from fingers” without real electrodes/analog front-end hardware.
+    What we can do inside Chrome:
+    <ul>
+      <li><b>PPG from the camera</b>: estimate pulse/HR (approx). Works surprisingly well with steady finger placement.</li>
+      <li><b>Import a signal</b>: paste/upload ECG/EEG samples from a device/file and run your enhancement math.</li>
+      <li><b>Optional</b>: hook up a real sensor via Web Bluetooth (stub included).</li>
+    </ul>
+  </div>
+
+  <div class="card grid">
+    <div>
+      <div class="row">
+        <div class="pill">Source</div>
+        <select id="source">
+          <option value="ppg" selected>Camera PPG (finger on lens)</option>
+          <option value="import">Import ECG/EEG samples (CSV/text)</option>
+          <option value="ble">Web Bluetooth sensor (advanced)</option>
+        </select>
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+        <div class="pill">Status <span id="status">idle</span></div>
+      </div>
+
+      <video id="vid" playsinline muted></video>
+
+      <div class="card" style="margin-top:10px">
+        <div class="row">
+          <div class="pill">Enhance</div>
+          <select id="enh">
+            <option value="off">Off</option>
+            <option value="prime" selected>Prime‑GLT denoise</option>
+            <option value="prime+diff">Prime‑GLT + derivative</option>
+          </select>
+          <div class="pill">Median k</div>
+          <input id="medk" type="number" min="1" max="9" step="2" value="3" style="width:90px">
+          <div class="pill">Primes</div>
+          <input id="primeCount" type="number" min="2" max="20" step="1" value="10" style="width:90px">
+          <div class="pill">Harmonics K</div>
+          <input id="K" type="number" min="1" max="12" step="1" value="4" style="width:110px">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <div class="pill">Window (s)</div>
+          <input id="win" type="number" min="4" max="40" step="1" value="12" style="width:90px">
+          <div class="pill">Sample rate (Hz)</div>
+          <input id="fs" type="number" min="10" max="120" step="1" value="30" style="width:90px">
+          <div class="pill">BPM <span id="bpm">—</span></div>
+          <div class="pill">SNR <span id="snr">—</span></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="pill">Import (CSV / whitespace / one number per line)</div>
+        <textarea id="importBox" rows="7" class="mono" style="width:100%;margin-top:8px" placeholder="Paste samples here... e.g.\n0.12\n0.18\n0.11\n..."></textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="loadText">Load pasted signal</button>
+          <input id="file" type="file" accept=".txt,.csv,.dat"/>
+          <div class="pill">Loaded <span id="loaded">0</span></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px">
+        <div class="pill">Web Bluetooth (stub)</div>
+        <div class="small">
+          If you have a BLE ECG/EEG device that sends samples via notifications, you can wire its
+          <span class="mono">service UUID</span> + <span class="mono">characteristic UUID</span> here.
+          Parsing is device-specific.
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input id="svc" class="mono" placeholder="service UUID" style="flex:1;min-width:220px">
+          <input id="chr" class="mono" placeholder="characteristic UUID" style="flex:1;min-width:220px">
+          <button id="bleConnect">Connect BLE</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="row" style="justify-content:space-between">
+        <div class="pill">Signal (raw vs enhanced)</div>
+        <div class="pill">Raw <span class="mono">orange</span> / Enhanced <span class="mono">green</span></div>
+      </div>
+      <canvas id="plot" width="720" height="360"></canvas>
+
+      <div class="card" style="margin-top:10px">
+        <div class="pill">Log</div>
+        <div id="log" class="mono" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id)=>document.getElementById(id);
+  const plot=$("plot"), ctx=plot.getContext("2d");
+  const vid=$("vid");
+
+  const statusEl=$("status"), bpmEl=$("bpm"), snrEl=$("snr");
+  const loadedEl=$("loaded");
+  const sourceEl=$("source"), enhEl=$("enh");
+  const winEl=$("win"), fsEl=$("fs");
+  const medkEl=$("medk"), primeCountEl=$("primeCount"), KEl=$("K");
+  const logEl=$("log");
+
+  let running=false;
+  let stopReq=false;
+
+  // ring buffer of samples
+  let raw=[]; // floats
+  let t0=0;
+
+  function log(msg){
+    const t=new Date().toLocaleTimeString();
+    const d=document.createElement("div");
+    d.textContent=`[${t}] ${msg}`;
+    logEl.appendChild(d);
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+  function setStatus(s){ statusEl.textContent=s; }
+
+  // ---- math tools ----
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+
+  function median1D(a,k){
+    const n=a.length;
+    const r=(k-1)/2;
+    const out=new Float64Array(n);
+    const buf=[];
+    for(let i=0;i<n;i++){
+      buf.length=0;
+      for(let j=-r;j<=r;j++){
+        const ii=clamp(i+j,0,n-1);
+        buf.push(a[ii]);
+      }
+      buf.sort((x,y)=>x-y);
+      out[i]=buf[(buf.length/2)|0];
+    }
+    return out;
+  }
+
+  function genPrimes(m){
+    const out=[];
+    let x=2;
+    while(out.length<m){
+      let ok=true;
+      for(const p of out){ if(p*p>x) break; if(x%p===0){ ok=false; break; } }
+      if(ok) out.push(x);
+      x++;
+    }
+    return out;
+  }
+
+  function primeGLTDenoise(sig, primeCount, K){
+    const N=sig.length;
+    const primes=genPrimes(primeCount);
+    const out=new Float64Array(N);
+    let mean=0; for(let i=0;i<N;i++) mean+=sig[i]; mean/=N;
+
+    for(const p of primes){
+      const ar=new Float64Array(K+1);
+      const ai=new Float64Array(K+1);
+      for(let k=1;k<=K;k++){
+        let sr=0, si=0;
+        for(let n=0;n<N;n++){
+          const ang=-2*Math.PI*k*n/p;
+          sr += (sig[n]-mean)*Math.cos(ang);
+          si += (sig[n]-mean)*Math.sin(ang);
+        }
+        ar[k]=sr/N; ai[k]=si/N;
+      }
+      for(let n=0;n<N;n++){
+        let v=mean;
+        for(let k=1;k<=K;k++){
+          const ang=2*Math.PI*k*n/p;
+          v += 2*(ar[k]*Math.cos(ang) - ai[k]*Math.sin(ang));
+        }
+        out[n]+=v;
+      }
+    }
+    for(let n=0;n<N;n++) out[n]/=primes.length;
+    return out;
+  }
+
+  function derivative(sig, fs){
+    const N=sig.length;
+    const out=new Float64Array(N);
+    out[0]=0;
+    for(let i=1;i<N;i++) out[i]=(sig[i]-sig[i-1])*fs;
+    return out;
+  }
+
+  // simple peak BPM estimate (not medical): count local maxima above threshold
+  function estimateBPM(sig, fs){
+    const N=sig.length;
+    if(N<10) return null;
+    let mean=0; for(let i=0;i<N;i++) mean+=sig[i]; mean/=N;
+    let varr=0; for(let i=0;i<N;i++){ const d=sig[i]-mean; varr+=d*d; } varr/=N;
+    const sd=Math.sqrt(varr);
+    const thr = mean + 0.35*sd;
+
+    let peaks=0;
+    let last=-1e9;
+    const minDist = Math.floor(0.30*fs); // >=200 bpm upper bound-ish
+    for(let i=1;i<N-1;i++){
+      if(sig[i]>thr && sig[i]>sig[i-1] && sig[i]>=sig[i+1]){
+        if(i-last>=minDist){ peaks++; last=i; }
+      }
+    }
+    const seconds = N/fs;
+    const bpm = peaks/seconds*60;
+    if(!isFinite(bpm) || bpm<35 || bpm>220) return null;
+    return bpm;
+  }
+
+  function snrProxy(raw, enh){
+    // proxy: variance ratio var(enh)/var(raw - enh)
+    const N=Math.min(raw.length, enh.length);
+    if(N<4) return null;
+    let m1=0,m2=0;
+    for(let i=0;i<N;i++){ m1+=enh[i]; m2+=(raw[i]-enh[i]); }
+    m1/=N; m2/=N;
+    let v1=0,v2=0;
+    for(let i=0;i<N;i++){
+      const a=enh[i]-m1;
+      const b=(raw[i]-enh[i])-m2;
+      v1+=a*a; v2+=b*b;
+    }
+    v1/=N; v2/=N;
+    if(v2<=1e-12) return 99;
+    return 10*Math.log10(v1/v2);
+  }
+
+  function enhanceWindow(rawArr, fs){
+    const N=rawArr.length;
+    const k = clamp(parseInt(medkEl.value,10)||3, 1, 9);
+    const kk = (k%2===1)?k:(k+1);
+    let sig = Float64Array.from(rawArr);
+    sig = median1D(sig, kk);
+
+    const enh = enhEl.value;
+    if(enh==="off"){
+      return {raw:sig, enh:sig, bpm:estimateBPM(sig,fs), snr:null};
+    }
+    const pc = clamp(parseInt(primeCountEl.value,10)||10, 2, 20);
+    const K = clamp(parseInt(KEl.value,10)||4, 1, 12);
+
+    let out = primeGLTDenoise(sig, pc, K);
+
+    if(enh==="prime+diff"){
+      out = derivative(out, fs);
+      // also derivative the reference so plot makes sense
+      sig = derivative(sig, fs);
+    }
+    const bpm = estimateBPM(out, fs);
+    const snr = snrProxy(sig, out);
+    return {raw:sig, enh:out, bpm, snr};
+  }
+
+  function drawSignal(rawSig, enhSig){
+    const W=plot.width, H=plot.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+
+    function bounds(sig){
+      let mn=Infinity,mx=-Infinity;
+      for(const v of sig){ if(v<mn) mn=v; if(v>mx) mx=v; }
+      if(!isFinite(mn)||!isFinite(mx)){ mn=-1; mx=1; }
+      if(mn===mx){ mn-=1; mx+=1; }
+      return {mn,mx};
+    }
+
+    const N=rawSig.length;
+    const b1=bounds(rawSig);
+    const b2=bounds(enhSig);
+    const mn=Math.min(b1.mn,b2.mn), mx=Math.max(b1.mx,b2.mx);
+    const pad=18;
+
+    // axes
+    ctx.strokeStyle="rgba(255,255,255,0.12)";
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(pad, H/2);
+    ctx.lineTo(W-pad, H/2);
+    ctx.stroke();
+
+    function ymap(v){ return (H-pad) - (v-mn)/(mx-mn)*(H-2*pad); }
+    function xmap(i){ return pad + i/(N-1)*(W-2*pad); }
+
+    // raw (orange)
+    ctx.strokeStyle="rgba(255,211,122,0.75)";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(xmap(0), ymap(rawSig[0]));
+    for(let i=1;i<N;i++) ctx.lineTo(xmap(i), ymap(rawSig[i]));
+    ctx.stroke();
+
+    // enhanced (green)
+    ctx.strokeStyle="rgba(157,255,176,0.92)";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(xmap(0), ymap(enhSig[0]));
+    for(let i=1;i<N;i++) ctx.lineTo(xmap(i), ymap(enhSig[i]));
+    ctx.stroke();
+
+    // text
+    ctx.fillStyle="rgba(255,255,255,0.72)";
+    ctx.font="12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace";
+    ctx.fillText(`N=${N}`, pad, 14);
+  }
+
+  // ---- PPG camera capture ----
+  let stream=null;
+  const tmp=document.createElement("canvas");
+  const tctx=tmp.getContext("2d", {willReadFrequently:true});
+
+  async function startPPG(){
+    // rear camera preferred
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    });
+    vid.srcObject = stream;
+    vid.style.display="block";
+    await vid.play();
+
+    tmp.width=160;
+    tmp.height=120;
+
+    const fs = clamp(parseInt(fsEl.value,10)||30, 10, 120);
+    const dt = 1/fs;
+    const win = clamp(parseFloat(winEl.value)||12, 4, 40);
+    const maxN = Math.floor(win*fs);
+
+    raw=[];
+    setStatus("ppg running");
+
+    let last=performance.now()/1000;
+    while(!stopReq){
+      const now=performance.now()/1000;
+      const elapsed = now-last;
+      if(elapsed < dt){
+        await new Promise(r=>setTimeout(r, Math.max(0, (dt-elapsed)*1000)));
+        continue;
+      }
+      last = now;
+
+      // sample mean red channel in downscaled frame
+      tctx.drawImage(vid, 0, 0, tmp.width, tmp.height);
+      const img = tctx.getImageData(0,0,tmp.width,tmp.height).data;
+      let rsum=0;
+      const step=4*4; // skip pixels
+      for(let i=0;i<img.length;i+=step){
+        rsum += img[i]; // red
+      }
+      const v = rsum / (img.length/step); // 0..255
+
+      raw.push(v);
+      while(raw.length>maxN) raw.shift();
+
+      if(raw.length>Math.max(30, Math.floor(2*fs))){
+        const {raw:rr, enh:ee, bpm, snr} = enhanceWindow(raw, fs);
+        drawSignal(rr, ee);
+        bpmEl.textContent = bpm ? bpm.toFixed(1) : "—";
+        snrEl.textContent = (snr==null) ? "—" : snr.toFixed(1)+" dB";
+      }
+    }
+  }
+
+  function stopAll(){
+    stopReq=true;
+    running=false;
+    $("stop").disabled=true;
+    $("start").disabled=false;
+    setStatus("stopped");
+    if(stream){
+      for(const tr of stream.getTracks()) tr.stop();
+      stream=null;
+    }
+    vid.pause();
+    vid.srcObject=null;
+    vid.style.display="none";
+  }
+
+  // ---- Import signal ----
+  function parseNumbers(text){
+    const toks = text.trim().split(/[\s,;]+/).filter(Boolean);
+    const out=[];
+    for(const t of toks){
+      const v = parseFloat(t);
+      if(Number.isFinite(v)) out.push(v);
+    }
+    return out;
+  }
+
+  function runImport(sig){
+    const fs = clamp(parseInt(fsEl.value,10)||250, 10, 2000);
+    const win = clamp(parseFloat(winEl.value)||12, 2, 120);
+    const maxN = Math.min(sig.length, Math.floor(win*fs));
+    const slice = sig.slice(-maxN);
+    raw = slice.slice();
+    setStatus("import ready");
+    const {raw:rr, enh:ee, bpm, snr} = enhanceWindow(raw, fs);
+    drawSignal(rr, ee);
+    bpmEl.textContent = bpm ? bpm.toFixed(1) : "—";
+    snrEl.textContent = (snr==null) ? "—" : snr.toFixed(1)+" dB";
+    loadedEl.textContent = String(sig.length);
+    log(`Loaded signal: ${sig.length} samples, using last ${slice.length} @ fs=${fs} Hz.`);
+  }
+
+  $("loadText").onclick=()=>{
+    const text = $("importBox").value;
+    const sig = parseNumbers(text);
+    if(sig.length<20){ log("Not enough samples pasted."); return; }
+    runImport(sig);
+  };
+
+  $("file").addEventListener("change", async (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    const text = await f.text();
+    const sig = parseNumbers(text);
+    if(sig.length<20){ log("File had too few numeric samples."); return; }
+    runImport(sig);
+  });
+
+  // ---- Web Bluetooth stub ----
+  let bleDev=null, bleChar=null;
+  $("bleConnect").onclick = async ()=>{
+    try{
+      if(!navigator.bluetooth){ log("Web Bluetooth not supported in this browser."); return; }
+      const svc = $("svc").value.trim();
+      const chr = $("chr").value.trim();
+      if(!svc || !chr){ log("Enter service UUID and characteristic UUID."); return; }
+      bleDev = await navigator.bluetooth.requestDevice({ filters: [{ services: [svc] }] });
+      const server = await bleDev.gatt.connect();
+      const service = await server.getPrimaryService(svc);
+      bleChar = await service.getCharacteristic(chr);
+      await bleChar.startNotifications();
+      bleChar.addEventListener("characteristicvaluechanged", (ev)=>{
+        // Device-specific parsing. Here we assume little-endian int16 samples, 1 per packet.
+        const dv = ev.target.value;
+        if(!dv) return;
+        if(dv.byteLength >= 2){
+          const v = dv.getInt16(0, true);
+          raw.push(v);
+          const fs = clamp(parseInt(fsEl.value,10)||250, 10, 2000);
+          const win = clamp(parseFloat(winEl.value)||12, 2, 120);
+          const maxN = Math.floor(win*fs);
+          while(raw.length>maxN) raw.shift();
+          if(raw.length>Math.max(30, Math.floor(2*fs))){
+            const {raw:rr, enh:ee, bpm, snr} = enhanceWindow(raw, fs);
+            drawSignal(rr, ee);
+            bpmEl.textContent = bpm ? bpm.toFixed(1) : "—";
+            snrEl.textContent = (snr==null) ? "—" : snr.toFixed(1)+" dB";
+          }
+        }
+      });
+      log("BLE connected + notifications started (parsing is a placeholder).");
+      setStatus("ble running");
+    } catch(err){
+      console.error(err);
+      log("BLE error: " + (err?.message || err));
+    }
+  };
+
+  // ---- Start/Stop ----
+  $("start").onclick = async ()=>{
+    try{
+      if(running) return;
+      stopReq=false;
+      running=true;
+      $("start").disabled=true;
+      $("stop").disabled=false;
+      bpmEl.textContent="—"; snrEl.textContent="—";
+      setStatus("starting…");
+      const src = sourceEl.value;
+
+      if(src==="ppg"){
+        log("Starting Camera PPG. Tip: cover the camera with a fingertip, keep still, stable lighting. Some phones need the flashlight (not controllable in standard web).");
+        await startPPG();
+      } else if(src==="import"){
+        log("Import mode: paste/upload samples then press Load.");
+        setStatus("import idle");
+      } else if(src==="ble"){
+        log("BLE mode: fill UUIDs, connect, then data will stream.");
+        setStatus("ble idle");
+      }
+    } catch(err){
+      console.error(err);
+      log("Start failed: " + (err?.message || err));
+      stopAll();
+    }
+  };
+
+  $("stop").onclick = ()=> stopAll();
+
+  // initial plot
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,plot.width,plot.height);
+  log("Ready.");
+})();
+</script>
+</body>
+</html>
