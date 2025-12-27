@@ -1,0 +1,1961 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0b0f17"/>
+<title>PhotonOS + AQAI + Linux + AQC Turbo</title>
+<style>
+  :root{
+    --bg:#0b0f17;
+    --line:rgba(255,255,255,.10);
+    --txt:rgba(233,242,255,.92);
+    --mut:rgba(233,242,255,.62);
+    --acc:rgba(106,228,255,.95);
+    --warn:rgba(255,196,106,.95);
+    --bad:rgba(255,120,120,.95);
+    --good:rgba(120,255,180,.95);
+    --shadow:0 18px 60px rgba(0,0,0,.45);
+    --r:18px;
+    --mono: ui-monospace, Menlo, Consolas, Monaco, "Courier New", monospace;
+    --ui: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:
+    radial-gradient(1200px 800px at 15% 5%, rgba(106,228,255,.12), transparent 55%),
+    radial-gradient(900px 700px at 85% 15%, rgba(255,196,106,.10), transparent 55%),
+    var(--bg);
+    color:var(--txt); font-family:var(--ui);
+  }
+  button,select,input,textarea{font-family:inherit}
+  a{color:var(--acc); text-decoration:none}
+  .app{height:100%; display:flex; flex-direction:column}
+  .topbar{
+    padding:10px 12px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  }
+  .brand{display:flex; align-items:center; gap:10px}
+  .logo{
+    width:34px;height:34px;border-radius:12px;
+    background:radial-gradient(circle at 35% 30%, rgba(106,228,255,.95), rgba(106,228,255,.12) 60%, rgba(255,255,255,.04) 80%);
+    border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  .title{font-weight:900; letter-spacing:.2px}
+  .subtitle{font-size:12px;color:var(--mut)}
+  .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+  .pill{padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);font-size:12px}
+  .pill b{color:var(--txt)}
+  .main{flex:1; display:grid; grid-template-columns: 305px 1fr; min-height:0}
+  .side{
+    border-right:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+    padding:12px; overflow:auto
+  }
+  .content{padding:12px; min-height:0; overflow:auto}
+  .card{
+    background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:var(--r);
+    box-shadow:var(--shadow);
+    padding:12px;
+  }
+  .card + .card{margin-top:12px}
+  .navbtn{
+    width:100%;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 12px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.03);
+    color:var(--txt);
+    cursor:pointer;
+  }
+  .navbtn.active{
+    border-color:rgba(106,228,255,.35);
+    box-shadow:0 0 0 3px rgba(106,228,255,.12);
+    background:rgba(106,228,255,.06);
+  }
+  .navbtn span{color:var(--mut); font-size:12px}
+  .navlist{display:flex; flex-direction:column; gap:8px}
+  .hr{height:1px;background:rgba(255,255,255,.10); margin:12px 0}
+  .small{font-size:12px;color:var(--mut); line-height:1.35}
+  .mono{font-family:var(--mono)}
+  .btn{
+    padding:10px 12px; border-radius:14px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.03);
+    color:var(--txt);
+    cursor:pointer;
+    user-select:none;
+    touch-action:manipulation;
+  }
+  .btn:hover{border-color:rgba(106,228,255,.28)}
+  .btn.primary{border-color:rgba(106,228,255,.35); background:rgba(106,228,255,.08)}
+  .btn.danger{border-color:rgba(255,120,120,.35); background:rgba(255,120,120,.06)}
+  .btn.good{border-color:rgba(120,255,180,.35); background:rgba(120,255,180,.06)}
+  .btn[disabled]{opacity:.45; cursor:not-allowed}
+  input,select,textarea{
+    background:rgba(0,0,0,.25);
+    border:1px solid rgba(255,255,255,.10);
+    color:var(--txt);
+    border-radius:12px;
+    padding:10px 10px;
+    outline:none;
+  }
+  textarea{min-height:120px; width:100%}
+  .grid2{display:grid; grid-template-columns: 1fr 1fr; gap:12px}
+  @media (max-width:920px){
+    .main{grid-template-columns:1fr}
+    .side{border-right:none;border-bottom:1px solid var(--line)}
+  }
+
+  .workspace{
+    position:relative;
+    border-radius:18px;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(0,0,0,.16);
+    overflow:hidden;
+    min-height: 540px;
+    transform-origin:center center;
+  }
+  canvas#photon{
+    width:100%;
+    height:100%;
+    display:block;
+    transform-origin:center center;
+  }
+  .wsOverlay{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    pointer-events:auto;
+  }
+  .hud{
+    pointer-events:none;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:10px;
+    gap:10px;
+  }
+  .hud .hudbox{
+    pointer-events:none;
+    background:rgba(0,0,0,.35);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:14px;
+    padding:10px 12px;
+    backdrop-filter: blur(8px);
+    max-width:min(520px, 92vw);
+  }
+  .hud .hudbox .h1{font-weight:900}
+  .hud .hudbox .h2{font-size:12px;color:var(--mut);margin-top:2px}
+  .hud .hudbox .h3{font-family:var(--mono);font-size:12px;color:rgba(106,228,255,.95);margin-top:6px;white-space:pre-wrap}
+  .floatingDoc{
+    pointer-events:auto;
+    position:absolute; inset:0;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+  }
+  .floatingDoc .sheet{
+    width:min(900px, 96vw);
+    max-height:min(82vh, 880px);
+    overflow:auto;
+    background:rgba(12,16,24,.66);
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:18px;
+    box-shadow:var(--shadow);
+    padding:16px 18px;
+    backdrop-filter: blur(10px);
+  }
+  .floatingDoc.on{display:flex}
+  .sheet pre{white-space:pre-wrap; font-family:var(--mono); font-size:12px; color:rgba(233,242,255,.85)}
+  .sheet .sep{height:1px;background:rgba(255,255,255,.10); margin:10px 0}
+
+  .winlayer{position:absolute; inset:0; pointer-events:none}
+  .win{
+    pointer-events:auto;
+    position:absolute;
+    left:28px; top:28px;
+    width:min(560px, 90vw);
+    height:min(420px, 64vh);
+    background:rgba(10,14,22,.72);
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:16px;
+    box-shadow:var(--shadow);
+    backdrop-filter: blur(10px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  .wbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 10px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    cursor:grab;
+  }
+  .wtitle{font-weight:900}
+  .wbtns{display:flex; gap:8px; align-items:center}
+  .wbtn{padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:var(--txt);cursor:pointer}
+  .wbody{flex:1; min-height:0; background:rgba(0,0,0,.12)}
+  .wbody iframe{width:100%;height:100%;border:0;background:#000}
+  .resizeHandle{
+    position:absolute; right:0; bottom:0; width:22px; height:22px;
+    border-top:1px solid rgba(255,255,255,.10);
+    border-left:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.03);
+    border-top-left-radius:10px;
+    cursor:nwse-resize;
+  }
+  .taskbar{
+    position:absolute; left:10px; right:10px; bottom:10px;
+    display:flex; gap:10px; align-items:center; justify-content:space-between;
+    pointer-events:auto;
+  }
+  .dock{
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    background:rgba(0,0,0,.35);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:999px;
+    padding:8px 10px;
+    backdrop-filter: blur(8px);
+  }
+  .dock button{padding:9px 12px;border-radius:999px}
+
+  .zen .topbar{display:none}
+  .zen .side{display:none}
+  .zen .main{grid-template-columns:1fr}
+  .zen .content{padding:10px}
+  .zen .card{padding:10px}
+  .zen .workspace{min-height: calc(100vh - 20px);}
+</style>
+</head>
+<body>
+<div class="app" id="appRoot">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <div class="title">PhotonOS + AQAI</div>
+        <div class="subtitle">GPU pole-field • Linux runner • AQC Turbo controls • smaller windows</div>
+      </div>
+    </div>
+    <div class="row">
+      <span class="pill"><b>Status</b> <span id="status">idle</span></span>
+      <span class="pill" style="border-color:rgba(255,120,120,.35)"><b>JS</b> <span id="err">ok</span></span>
+      <span class="pill"><b>FPS</b> <span id="fps">—</span></span>
+      <button class="btn" id="zenBtn">Zen</button>
+      <button class="btn" id="fsBtn">Fullscreen</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="side">
+      <div class="navlist">
+        <button class="navbtn active" data-view="screen"><div><b>Screen</b><div class="small">Photon array compositor</div></div><span>canvas</span></button>
+        <button class="navbtn" data-view="aqc"><div><b>AQC Turbo</b><div class="small">GPU + ops</div></div><span>fast</span></button>
+        <button class="navbtn" data-view="ai"><div><b>AQAI</b><div class="small">Useful local agent</div></div><span>assist</span></button>
+        <button class="navbtn" data-view="linux"><div><b>Linux</b><div class="small">Run ISO (v86)</div></div><span>iso</span></button>
+        <button class="navbtn" data-view="monograph"><div><b>Monograph</b><div class="small">Load + overlay doc</div></div><span>doc</span></button>
+        <button class="navbtn" data-view="apps"><div><b>Apps</b><div class="small">Run local HTML apps</div></div><span>dir</span></button>
+        <button class="navbtn" data-view="compute"><div><b>Compute</b><div class="small">Pole kernel params</div></div><span>poles</span></button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="card">
+        <div style="font-weight:900">Bigger canvas, more pixels</div>
+        <div class="small">Render scale reduces internal computation while keeping the display big. Set Windows to <b>small</b> to see more of the emitter field.</div>
+        <div class="hr"></div>
+        <div class="small">Render scale</div>
+        <div class="row" style="margin-top:6px">
+          <select id="renderScale">
+            <option value="0.20">0.20x (ultra fast)</option>
+            <option value="0.25">0.25x (fast)</option>
+            <option value="0.35" selected>0.35x</option>
+            <option value="0.50">0.50x</option>
+            <option value="0.75">0.75x</option>
+            <option value="1.00">1.00x (slow)</option>
+          </select>
+          <select id="winScale">
+            <option value="0.55" selected>Windows: small</option>
+            <option value="0.75">Windows: medium</option>
+            <option value="1">Windows: large</option>
+          </select>
+        </div>
+        <div class="hr"></div>
+        <div class="row">
+          <button class="btn" id="tileBtn">Tile</button>
+          <button class="btn" id="cascadeBtn">Cascade</button>
+          <button class="btn danger" id="closeAllBtn">Close all</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div id="view-screen" class="card">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">Photon Array Screen</div>
+            <div class="small">CPU renderer is a fallback; GPU renderer is the fast path.</div>
+          </div>
+          <div class="row">
+            <button class="btn good" id="startRender">Start</button>
+            <button class="btn danger" id="stopRender" disabled>Stop</button>
+            <button class="btn" id="tiltBtn">Tilt 45°</button>
+            <button class="btn" id="docToggleBtn">Monograph</button>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="grid2">
+          <div>
+            <div class="small">Mode</div>
+            <div class="row" style="margin-top:6px">
+              <select id="modeSel">
+                <option value="poles" selected>Pole-field (ptronics)</option>
+                <option value="grid">Grid + poles</option>
+                <option value="noise">Noise lock-in</option>
+              </select>
+              <select id="rendererSel">
+                <option value="gpu" selected>Renderer: GPU (WebGL2)</option>
+                <option value="cpu">Renderer: CPU</option>
+              </select>
+              <select id="resSel">
+                <option value="native" selected>Native</option>
+                <option value="720p">1280×720</option>
+                <option value="1080p">1920×1080</option>
+                <option value="1440p">2560×1440</option>
+              </select>
+            </div>
+            <div class="small" style="margin-top:8px">Tip: 1080p + render scale 0.25–0.35 + GPU = huge screen but smooth.</div>
+          </div>
+          <div>
+            <div class="small">Poles</div>
+            <div class="row" style="margin-top:6px">
+              <select id="poleN">
+                <option value="3" selected>3 poles</option>
+                <option value="5">5 poles</option>
+                <option value="8">8 poles</option>
+                <option value="12">12 poles</option>
+              </select>
+              <input id="gain" type="number" step="0.05" value="0.85" style="width:120px" />
+              <input id="speed" type="number" step="0.05" value="1.00" style="width:120px" />
+              <input id="seed" type="text" value="BAZ" style="width:120px" />
+            </div>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="workspace" id="workspace">
+          <canvas id="photon"></canvas>
+
+          <div class="wsOverlay">
+            <div class="hud">
+              <div class="hudbox">
+                <div class="h1">Emitter Array</div>
+                <div class="h2">live render • pole kernel • CPU/GPU selectable</div>
+                <div class="h3" id="hudText">ready</div>
+              </div>
+              <div class="hudbox">
+                <div class="h1">AQAI</div>
+                <div class="h2">agent state</div>
+                <div class="h3" id="hudAI">disabled</div>
+              </div>
+            </div>
+
+            <div class="floatingDoc" id="floatingDoc">
+              <div class="sheet">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+                  <div>
+                    <div style="font-weight:950">Floating Monograph</div>
+                    <div class="small">Loaded locally (.txt/.md). Shown as overlay.</div>
+                  </div>
+                  <div class="small mono" id="docMeta">—</div>
+                </div>
+                <div class="sep"></div>
+                <pre id="docText">No document loaded yet.</pre>
+              </div>
+            </div>
+
+            <div class="winlayer" id="winlayer"></div>
+
+            <div class="taskbar">
+              <div class="dock">
+                <button class="btn" id="dockApps">Apps</button>
+                <button class="btn" id="dockAI">AQAI</button>
+                <button class="btn" id="dockLinux">Linux</button>
+                <button class="btn" id="dockReset">Reset</button>
+              </div>
+              <div class="dock">
+                <button class="btn" id="dockScreenshot">Snapshot</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-aqc" class="card" style="display:none">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">AQC Turbo</div>
+            <div class="small">GPU pole-field + operators + adaptive governor. This is binary compute on the phone GPU, not a CPU toy loop.</div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="aqcTurbo">Enable Turbo</button>
+            <button class="btn" id="aqcGov">Governor: on</button>
+            <button class="btn" id="aqcOpsRun">Run operator</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+
+        <div class="grid2">
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Turbo settings</div>
+            <div class="small">Turbo forces GPU + prime pole presets and can auto-push quality until FPS target is met.</div>
+            <div class="hr"></div>
+            <div class="row">
+              <label class="small">Target FPS</label>
+              <input id="aqcTargetFps" type="number" step="1" value="28" style="width:110px"/>
+              <label class="small">Max scale</label>
+              <select id="aqcMaxScale">
+                <option value="0.35">0.35x</option>
+                <option value="0.50" selected>0.50x</option>
+                <option value="0.75">0.75x</option>
+                <option value="1.00">1.00x</option>
+              </select>
+              <label class="small">Pole preset</label>
+              <select id="aqcPreset">
+                <option value="prime3" selected>Prime 3</option>
+                <option value="prime5">Prime 5</option>
+                <option value="prime8">Prime 8</option>
+                <option value="prime12">Prime 12</option>
+              </select>
+            </div>
+            <div class="hr"></div>
+            <div class="small">Status</div>
+            <pre class="mono small" id="aqcStatus">Turbo off.</pre>
+          </div>
+
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Operators (useful)</div>
+            <div class="small">Runs on real sampled pixels from the emitter field to extract stable scalars: lock-in amplitude/phase, drift proxy, mini spectrum.</div>
+            <div class="hr"></div>
+            <div class="row">
+              <select id="aqcOp">
+                <option value="lockin" selected>Lock-in (demod)</option>
+                <option value="phase">Phase drift</option>
+                <option value="spectrum">Mini spectrum</option>
+              </select>
+              <input id="aqcWindow" type="number" step="16" value="256" style="width:120px" title="samples"/>
+            </div>
+            <div class="hr"></div>
+            <pre class="mono small" id="aqcOut">—</pre>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-ai" class="card" style="display:none">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">AQAI (useful local agent)</div>
+            <div class="small">Offline agent: launch apps, manage windows, summarize/search monograph, auto-tune render based on real canvas samples.</div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="aiEnable">Enable</button>
+            <button class="btn" id="aiAuto">Auto-tune: off</button>
+            <button class="btn" id="aiHelp">Commands</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+
+        <div class="grid2">
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Command</div>
+            <div class="small">Examples: <span class="mono">open calculator</span>, <span class="mono">tile</span>, <span class="mono">summarize</span>, <span class="mono">search quantum</span>, <span class="mono">boost fps</span></div>
+            <div class="hr"></div>
+            <div class="row">
+              <input id="aiCmd" placeholder="Type a command…" style="flex:1;min-width:220px" />
+              <button class="btn primary" id="aiRun">Run</button>
+            </div>
+            <div class="hr"></div>
+            <div class="small">Agent metrics (sampled from canvas):</div>
+            <pre id="aiMetrics" class="mono small">—</pre>
+          </div>
+
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Output</div>
+            <div class="small">Local, offline text + OS actions only.</div>
+            <div class="hr"></div>
+            <textarea id="aiOut" spellcheck="false" placeholder="Agent output…"></textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" id="aiClear">Clear</button>
+              <button class="btn" id="aiDownload">Download log</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-linux" class="card" style="display:none">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">Linux runner (v86)</div>
+            <div class="small">Runs a real x86 emulator in the browser (WASM). This is the practical “Ubuntu-runnable” path inside this OS.</div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="linuxPickBundle">Pick v86 Bundle Dir</button>
+            <button class="btn" id="linuxPickIso">Pick ISO</button>
+            <button class="btn good" id="linuxStart" disabled>Start Linux</button>
+            <button class="btn danger" id="linuxStop" disabled>Stop</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="grid2">
+          <div>
+            <div style="font-weight:900">Bundle requirements</div>
+            <div class="small mono">Directory must contain: v86.js, v86.wasm</div>
+            <div class="small">This HTML stays single-file; it loads the emulator from your chosen folder.</div>
+            <div class="hr"></div>
+            <pre class="mono small" id="linuxStatus">No bundle selected.</pre>
+          </div>
+          <div>
+            <div style="font-weight:900">Boot config</div>
+            <div class="row">
+              <label class="small">RAM (MB)</label>
+              <input id="linuxRam" type="number" step="32" value="256" style="width:120px"/>
+              <label class="small">VGA</label>
+              <select id="linuxVga">
+                <option value="false" selected>Basic</option>
+                <option value="true">VGA</option>
+              </select>
+            </div>
+            <div class="small" style="margin-top:8px">Linux appears in a window on the Screen tab.</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-monograph" class="card" style="display:none">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">Monograph (local text)</div>
+            <div class="small">Pick a folder that contains .txt or .md and load one into the floating overlay.</div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="pickDocDir">Pick Doc Directory</button>
+            <button class="btn" id="refreshDocs" disabled>Refresh</button>
+            <button class="btn" id="showDocOnScreen" disabled>Show on Screen</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="grid2">
+          <div>
+            <div class="small">Documents</div>
+            <div class="hr"></div>
+            <div id="docList" class="small">No directory selected.</div>
+          </div>
+          <div>
+            <div class="small">Preview</div>
+            <div class="hr"></div>
+            <textarea id="docPreview" placeholder="Select a document to preview…" spellcheck="false"></textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" id="loadToSheet" disabled>Load to Floating Sheet</button>
+              <button class="btn" id="hideSheet" disabled>Hide Sheet</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-apps" class="card" style="display:none">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div>
+            <div style="font-weight:950;font-size:18px">Local App Directory</div>
+            <div class="small">Pick a folder containing your single-file HTML apps. Launch them in smaller resizable windows.</div>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="pickAppDir">Pick App Directory</button>
+            <button class="btn" id="refreshApps" disabled>Refresh</button>
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div id="appList" class="small">No app directory selected.</div>
+      </div>
+
+      <div id="view-compute" class="card" style="display:none">
+        <div style="font-weight:950;font-size:18px">Compute</div>
+        <div class="small">Debug + live pole dump.</div>
+        <div class="hr"></div>
+        <div class="grid2">
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Pole dump</div>
+            <pre id="poleDump" class="mono small">—</pre>
+          </div>
+          <div class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+            <div style="font-weight:900">Performance</div>
+            <pre id="perfDump" class="mono small">—</pre>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const reportErr = (e) => {
+    try{
+      const msg = (e && (e.message || e.reason || e.error && e.error.message)) ? String(e.message || e.reason || e.error.message) : String(e);
+      const el = document.getElementById("err");
+      if(el) el.textContent = msg.slice(0, 64) + (msg.length>64 ? "…" : "");
+      const st = document.getElementById("status");
+      if(st) st.textContent = "error";
+      console.error(e);
+    }catch(_){}
+  };
+  window.addEventListener('error', (ev)=>reportErr(ev));
+  window.addEventListener('unhandledrejection', (ev)=>reportErr(ev));
+
+  const $ = (id)=>document.getElementById(id);
+  const appRoot = $("appRoot");
+  function safeOn(el, type, fn, opts){
+    if(!el) return;
+    el.addEventListener(type, (e)=>{
+      try{ fn(e); }
+      catch(err){ reportErr(err); }
+    }, Object.assign({passive:false}, opts||{}));
+  }
+  // On some mobile builds, click can be flaky if pointer events are involved.
+  // We bind both click + pointerup for critical buttons.
+  function safeTap(el, fn){
+    safeOn(el, "click", fn);
+    safeOn(el, "pointerup", (e)=>{ if(e.pointerType!=="mouse") fn(e); });
+    safeOn(el, "touchend", fn);
+  }
+
+
+  // Navigation
+  const VIEWS = ["screen","aqc","ai","linux","monograph","apps","compute"];
+  function showView(v){
+    for(const name of VIEWS){
+      $("view-"+name).style.display = (name===v) ? "block" : "none";
+    }
+    for(const b of document.querySelectorAll(".navbtn")){
+      b.classList.toggle("active", b.dataset.view===v);
+    }
+  }
+  for(const b of document.querySelectorAll(".navbtn")){
+    safeTap(b, ()=>showView(b.dataset.view));
+  }
+  safeTap($("dockApps"), ()=>showView("apps"));
+  safeTap($("dockAI"), ()=>showView("ai"));
+  safeTap($("dockLinux"), ()=>showView("linux"));
+  safeTap($("dockReset"), ()=>{ tiltOn=false; applyTilt(); floating(false); });
+
+  // Fullscreen / Zen
+  safeTap($("fsBtn"), async ()=>{
+    try{
+      if(!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      else await document.exitFullscreen();
+    }catch{}
+  });
+  let zen=false;
+  safeTap($("zenBtn"), ()=>{
+    zen=!zen;
+    appRoot.classList.toggle("zen", zen);
+    setTimeout(resizeAll, 60);
+  });
+
+  function setStatus(s){ $("status").textContent = s; }
+
+  // RNG
+  function xmur3(str){
+    let h = 1779033703 ^ str.length;
+    for (let i=0;i<str.length;i++){
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function(){
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      return (h ^= (h >>> 16)) >>> 0;
+    }
+  }
+  function mulberry32(a){
+    return function(){
+      let t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+  }
+
+  // Canvas + CPU renderer
+  const canvas = $("photon");
+  const ctx = canvas.getContext("2d", {alpha:false, desynchronized:true});
+  const off = document.createElement("canvas");
+  const offCtx = off.getContext("2d", {alpha:false, desynchronized:true});
+
+  // GPU offscreen canvas
+  const glc = document.createElement("canvas");
+  let gl = null, glProg=null, glBuf=null, glUniforms=null;
+
+  let running=false, raf=0, lastT=0, fpsCount=0, fpsT0=performance.now();
+  let tiltOn=false;
+  function applyTilt(){ $("workspace").style.transform = tiltOn ? "perspective(1000px) rotateX(45deg)" : "none"; }
+  safeTap($("tiltBtn"), ()=>{ tiltOn=!tiltOn; applyTilt(); });
+
+  // Floating doc
+  let docOn=false;
+  function floating(on){
+    docOn=!!on;
+    $("floatingDoc").classList.toggle("on", docOn);
+  }
+  safeTap($("docToggleBtn"), ()=>floating(!docOn));
+
+  function hudText(s){ $("hudText").textContent = s; }
+  function aiHud(msg){ $("hudAI").textContent = msg; }
+
+  // Poles
+  let poles=[];
+  function initPoles(){
+    const N = Number($("poleN").value);
+    const seed = $("seed").value || "BAZ";
+    const rnd = mulberry32(xmur3(seed)());
+    poles=[];
+    for(let i=0;i<N;i++){
+      const a = rnd()*Math.PI*2;
+      const r = 0.25 + 0.65*rnd();
+      poles.push({x:r*Math.cos(a), y:r*Math.sin(a), vx:(rnd()-0.5)*0.02, vy:(rnd()-0.5)*0.02});
+    }
+    dumpPoles();
+  }
+  $("poleN").addEventListener("change", initPoles);
+  $("seed").addEventListener("change", initPoles);
+  initPoles();
+
+  function dumpPoles(){
+    $("poleDump").textContent = poles.map((p,i)=>`${String(i).padStart(2,"0")}: x=${p.x.toFixed(6)} y=${p.y.toFixed(6)} vx=${p.vx.toFixed(6)} vy=${p.vy.toFixed(6)}`).join("\n");
+  }
+
+  function computeTargetCanvasSize(){
+    const sel = $("resSel").value;
+    const rect = $("workspace").getBoundingClientRect();
+    let dispW = Math.max(1, Math.floor(rect.width));
+    let dispH = Math.max(1, Math.floor(rect.height));
+    let baseW = dispW, baseH = dispH;
+
+    if(sel === "720p"){ baseW=1280; baseH=720; }
+    else if(sel === "1080p"){ baseW=1920; baseH=1080; }
+    else if(sel === "1440p"){ baseW=2560; baseH=1440; }
+    else {
+      const dpr = Math.max(1, Math.min(3, window.devicePixelRatio||1));
+      baseW = Math.floor(dispW * dpr);
+      baseH = Math.floor(dispH * dpr);
+    }
+
+    const scale = Number($("renderScale").value || 0.35);
+    const iw = Math.max(64, Math.floor(baseW * scale));
+    const ih = Math.max(64, Math.floor(baseH * scale));
+    return {dispW, dispH, baseW, baseH, iw, ih, scale};
+  }
+
+  function resizeAll(){
+    const {dispW, dispH, baseW, baseH, iw, ih} = computeTargetCanvasSize();
+
+    canvas.width = baseW;
+    canvas.height = baseH;
+    off.width = iw;
+    off.height = ih;
+    glc.width = iw;
+    glc.height = ih;
+
+    ctx.fillStyle = "black";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    offCtx.fillStyle = "black";
+    offCtx.fillRect(0,0,off.width,off.height);
+
+    if(gl){
+      gl.viewport(0,0,glc.width,glc.height);
+    }
+
+    $("perfDump").textContent =
+      `display=${dispW}×${dispH}\ncanvas=${baseW}×${baseH}\ninternal=${iw}×${ih}\nrenderScale=${Number($("renderScale").value).toFixed(2)}\nrenderer=${$("rendererSel").value}`;
+  }
+
+  const ro = new ResizeObserver(()=>{ resizeAll(); });
+  ro.observe($("workspace"));
+  window.addEventListener("resize", ()=>setTimeout(resizeAll, 90));
+  window.addEventListener("orientationchange", ()=>setTimeout(resizeAll, 220));
+  $("resSel").addEventListener("change", ()=>setTimeout(resizeAll, 20));
+  $("renderScale").addEventListener("change", ()=>setTimeout(resizeAll, 20));
+  $("rendererSel").addEventListener("change", ()=>{
+    ensureGL();
+    setTimeout(resizeAll, 20);
+  });
+  resizeAll();
+
+  function stepPoles(dt){
+    const g = Number($("gain").value);
+    const sp = Number($("speed").value);
+    const N = poles.length;
+    const k = 1.10 * g;
+    for(let i=0;i<N;i++){
+      let ax=0, ay=0;
+      const pi=poles[i];
+      for(let j=0;j<N;j++){
+        if(i===j) continue;
+        const pj=poles[j];
+        const dx=pj.x-pi.x, dy=pj.y-pi.y;
+        const r2 = dx*dx + dy*dy + 1e-4;
+        const inv = 1/Math.sqrt(r2);
+        ax += 0.20*(dx*inv) - 0.05*(dx/r2);
+        ay += 0.20*(dy*inv) - 0.05*(dy/r2);
+      }
+      ax += 0.30*(-pi.y);
+      ay += 0.30*( pi.x);
+      pi.vx = (pi.vx + ax*dt*k*sp) * 0.988;
+      pi.vy = (pi.vy + ay*dt*k*sp) * 0.988;
+    }
+    for(const p of poles){
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+      const lim = 1.2;
+      if(p.x> lim){ p.x= lim; p.vx*=-0.65; }
+      if(p.x<-lim){ p.x=-lim; p.vx*=-0.65; }
+      if(p.y> lim){ p.y= lim; p.vy*=-0.65; }
+      if(p.y<-lim){ p.y=-lim; p.vy*=-0.65; }
+    }
+  }
+
+  // GPU renderer (WebGL2)
+  function compile(gl, type, src){
+    const s=gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      const e=gl.getShaderInfoLog(s)||"shader error";
+      gl.deleteShader(s);
+      throw new Error(e);
+    }
+    return s;
+  }
+  function link(gl, vs, fs){
+    const p=gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+      const e=gl.getProgramInfoLog(p)||"link error";
+      gl.deleteProgram(p);
+      throw new Error(e);
+    }
+    return p;
+  }
+
+  const MAXP = 12;
+
+  function ensureGL(){
+    if($("rendererSel").value !== "gpu") return;
+    if(gl && glProg && glUniforms) return;
+    gl = glc.getContext("webgl2", {alpha:false, antialias:false, depth:false, stencil:false, preserveDrawingBuffer:false});
+    if(!gl){
+      $("rendererSel").value = "cpu";
+      return;
+    }
+
+    const vsSrc = `#version 300 es
+      in vec2 aPos;
+      out vec2 vUv;
+      void main(){
+        vUv = aPos*0.5 + 0.5;
+        gl_Position = vec4(aPos, 0.0, 1.0);
+      }`;
+    const fsSrc = `#version 300 es
+      precision highp float;
+      in vec2 vUv;
+      out vec4 outColor;
+
+      uniform vec2 uRes;
+      uniform float uTime;
+      uniform float uGain;
+      uniform float uSpeed;
+      uniform int uCount;
+      uniform vec4 uPole[${MAXP}];
+
+      float sat(float x){return clamp(x,0.0,1.0);}
+
+      void main(){
+        vec2 p = vUv * uRes;
+        vec2 f = (p - 0.5*uRes) / uRes.y;
+        float tt = uTime * 0.001 * uSpeed;
+        float ph0 = tt * 1.25;
+
+        float s=0.0, c=0.0;
+        for(int i=0;i<${MAXP};i++){
+          if(i>=uCount) break;
+          vec4 po = uPole[i];
+          vec2 pc = vec2(0.5 + 0.36*po.x, 0.5 + 0.36*po.y) * uRes;
+          vec2 d = p - pc;
+          float r = length(d) + 1.0;
+          float ph = ph0 + 0.055*r + 5.4*(f.x*po.z + f.y*po.w);
+          float den = 1.0 + 0.010*r;
+          s += sin(ph)/den;
+          c += cos(ph)/den;
+        }
+        float N = float(max(uCount,1));
+        float amp = min(1.0, sqrt(s*s + c*c) / (N*0.62));
+        float ph = atan(s,c);
+        float v = 0.20 + 0.80*amp;
+        float glow = 0.5 + 0.5*sin(ph*2.0);
+        float g = clamp(uGain, 0.2, 1.4);
+        v = sat(0.5 + (v-0.5)*g);
+
+        vec3 col;
+        col.r = (0.06 + 0.20*v + 0.10*glow);
+        col.g = (0.14 + 0.52*v + 0.18*glow);
+        col.b = (0.22 + 0.80*v + 0.30*glow);
+        outColor = vec4(sat(col), 1.0);
+      }`;
+
+    const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
+    const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
+    glProg = link(gl, vs, fs);
+
+    glBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1,-1,  1,-1, -1, 1,
+      -1, 1,  1,-1,  1, 1
+    ]), gl.STATIC_DRAW);
+
+    const loc = gl.getAttribLocation(glProg, "aPos");
+    gl.useProgram(glProg);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    glUniforms = {
+      uRes: gl.getUniformLocation(glProg, "uRes"),
+      uTime: gl.getUniformLocation(glProg, "uTime"),
+      uGain: gl.getUniformLocation(glProg, "uGain"),
+      uSpeed: gl.getUniformLocation(glProg, "uSpeed"),
+      uCount: gl.getUniformLocation(glProg, "uCount"),
+      uPole: Array.from({length:MAXP}, (_,i)=>gl.getUniformLocation(glProg, `uPole[${i}]`)),
+    };
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.viewport(0,0,glc.width,glc.height);
+  }
+
+  function renderPoleFieldGPU(t){
+    try{
+      ensureGL();
+    }catch(e){
+      try{ reportErr(e); }catch(_){}
+      try{ $("rendererSel").value = "cpu"; }catch(_){}
+      gl = null; glProg = null; glUniforms = null;
+      renderPoleFieldCPU(t);
+      return;
+    }
+    if(!gl || !glProg || !glUniforms || !glUniforms.uRes) {
+      renderPoleFieldCPU(t);
+      return;
+    }
+
+    gl.useProgram(glProg);
+    gl.viewport(0,0,glc.width,glc.height);
+    gl.uniform2f(glUniforms.uRes, glc.width, glc.height);
+    gl.uniform1f(glUniforms.uTime, t);
+    gl.uniform1f(glUniforms.uGain, Number($("gain").value));
+    gl.uniform1f(glUniforms.uSpeed, Number($("speed").value));
+    gl.uniform1i(glUniforms.uCount, poles.length);
+
+    for(let i=0;i<MAXP;i++){
+      if(i<poles.length){
+        const p=poles[i];
+        gl.uniform4f(glUniforms.uPole[i], p.x, p.y, p.x, p.y);
+      }else{
+        gl.uniform4f(glUniforms.uPole[i], 0,0,0,0);
+      }
+    }
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(glc, 0,0, canvas.width, canvas.height);
+  }
+
+  // CPU fallback
+  function renderPoleFieldCPU(t){
+    const w=off.width, h=off.height;
+    const img = offCtx.createImageData(w,h);
+    const d=img.data;
+
+    const N=poles.length;
+    const px = new Array(N), py = new Array(N), sx=new Array(N), sy=new Array(N);
+    for(let i=0;i<N;i++){
+      px[i] = (0.5 + 0.36*poles[i].x)*w;
+      py[i] = (0.5 + 0.36*poles[i].y)*h;
+      sx[i] = poles[i].x;
+      sy[i] = poles[i].y;
+    }
+
+    const tt = t*0.001*Number($("speed").value);
+    const ph0 = tt*1.25;
+
+    let k=0;
+    for(let y=0;y<h;y++){
+      const fy = (y - h*0.5)/h;
+      for(let x=0;x<w;x++){
+        const fx = (x - w*0.5)/w;
+        let s=0, c=0;
+        for(let i=0;i<N;i++){
+          const dx=x-px[i], dy=y-py[i];
+          const r = Math.sqrt(dx*dx + dy*dy) + 1;
+          const ph = ph0 + 0.055*r + 5.4*(fx*sx[i] + fy*sy[i]);
+          const den = 1 + 0.010*r;
+          s += Math.sin(ph)/den;
+          c += Math.cos(ph)/den;
+        }
+        const amp = Math.min(1, Math.sqrt(s*s + c*c) / (N*0.62));
+        const ph = Math.atan2(s,c);
+        let v = 0.20 + 0.80*amp;
+        const glow = 0.5 + 0.5*Math.sin(ph*2.0);
+        const g = Math.max(0.2, Math.min(1.4, Number($("gain").value)));
+        v = Math.max(0, Math.min(1, 0.5 + (v-0.5)*g));
+
+        d[k++] = (0.06 + 0.20*v + 0.10*glow)*255|0;
+        d[k++] = (0.14 + 0.52*v + 0.18*glow)*255|0;
+        d[k++] = (0.22 + 0.80*v + 0.30*glow)*255|0;
+        d[k++] = 255;
+      }
+    }
+    offCtx.putImageData(img,0,0);
+    ctx.drawImage(off, 0,0, canvas.width, canvas.height);
+  }
+
+  function renderGrid(t){
+    const w=canvas.width,h=canvas.height;
+    ctx.fillStyle="rgba(0,0,0,.35)";
+    ctx.fillRect(0,0,w,h);
+    const step = Math.max(22, Math.floor(Math.min(w,h)/18));
+    ctx.strokeStyle="rgba(106,228,255,.18)";
+    ctx.lineWidth=Math.max(1, Math.floor(Math.min(w,h)/700));
+    for(let x=0;x<=w;x+=step){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for(let y=0;y<=h;y+=step){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+
+    const tt=t*0.001;
+    for(let i=0;i<poles.length;i++){
+      const x=(0.5 + 0.36*poles[i].x)*w;
+      const y=(0.5 + 0.36*poles[i].y)*h;
+      const rad=10 + 7*Math.sin(tt*2+i);
+      ctx.fillStyle="rgba(106,228,255,.92)";
+      ctx.beginPath(); ctx.arc(x,y,rad,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  function renderNoise(t){
+    const w=off.width,h=off.height;
+    const img=offCtx.createImageData(w,h);
+    const d=img.data;
+    const tt=t*0.001;
+    let k=0;
+    for(let i=0;i<w*h;i++){
+      const n = (Math.sin(i*0.0006 + tt*3.0) + Math.sin(i*0.0011 - tt*2.2))*0.5;
+      const v = 0.5 + 0.5*n;
+      d[k++] = (0.05+0.18*v)*255|0;
+      d[k++] = (0.16+0.60*v)*255|0;
+      d[k++] = (0.22+0.86*v)*255|0;
+      d[k++] = 255;
+    }
+    offCtx.putImageData(img,0,0);
+    ctx.drawImage(off,0,0,canvas.width,canvas.height);
+    ctx.fillStyle="rgba(0,0,0,.18)";
+    for(let b=0;b<6;b++){
+      const y = ((b/6)+0.02*Math.sin(tt*1.4+b))*canvas.height;
+      ctx.fillRect(0,y,canvas.width,Math.max(2, canvas.height/220));
+    }
+  }
+
+  function loop(t){
+    if(!running) return;
+    const dt = Math.min(0.05, (t-lastT)/1000 || 0.016);
+    lastT=t;
+
+    stepPoles(dt);
+
+    const mode=$("modeSel").value;
+    const renderer=$("rendererSel").value;
+
+    if(mode==="poles"){
+      if(renderer==="gpu") renderPoleFieldGPU(t);
+      else renderPoleFieldCPU(t);
+    } else if(mode==="grid"){
+      renderGrid(t);
+    } else {
+      renderNoise(t);
+    }
+
+    fpsCount++;
+    const now=performance.now();
+    if(now - fpsT0 > 700){
+      const fps = fpsCount*1000/(now-fpsT0);
+      $("fps").textContent = fps.toFixed(1);
+      fpsCount=0; fpsT0=now;
+      dumpPoles();
+    }
+
+    hudText(`mode=${mode} renderer=${renderer}\nN=${poles.length} gain=${Number($("gain").value).toFixed(2)} speed=${Number($("speed").value).toFixed(2)}\nres=${canvas.width}×${canvas.height} internal=${off.width}×${off.height}`);
+
+    raf=requestAnimationFrame(loop);
+  }
+
+  safeTap($("startRender"), ()=>{
+    if(running) return;
+    running=true;
+    $("startRender").disabled=true;
+    $("stopRender").disabled=false;
+    setStatus("rendering");
+    lastT=performance.now();
+    raf=requestAnimationFrame(loop);
+  });
+  safeTap($("stopRender"), ()=>{
+    running=false;
+    $("startRender").disabled=false;
+    $("stopRender").disabled=true;
+    setStatus("stopped");
+    cancelAnimationFrame(raf);
+  });
+
+  // Start immediately
+  $("startRender").click();
+
+  // Monograph loader
+  let docDirHandle=null;
+  let docFiles=[];
+  function esc(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+  async function listDocs(){
+    docFiles=[];
+    if(!docDirHandle){ $("docList").textContent="No directory selected."; return; }
+    for await (const [name, handle] of docDirHandle.entries()){
+      if(handle.kind==="file" && (name.toLowerCase().endsWith(".txt") || name.toLowerCase().endsWith(".md"))){
+        docFiles.push({name, handle});
+      }
+    }
+    docFiles.sort((a,b)=>a.name.localeCompare(b.name));
+    const box=$("docList");
+    box.innerHTML = docFiles.length ? "" : "<div class='small'>No .txt/.md found.</div>";
+    for(const f of docFiles){
+      const btn=document.createElement("button");
+      btn.className="navbtn";
+      btn.innerHTML = `<div><b>${esc(f.name)}</b><div class="small">tap to preview</div></div><span>txt</span>`;
+      btn.addEventListener("click", async ()=>{
+        const file = await f.handle.getFile();
+        const text = await file.text();
+        $("docPreview").value=text;
+        $("loadToSheet").disabled=false;
+        $("showDocOnScreen").disabled=false;
+        $("docMeta").textContent = `${f.name} • ${Math.round(file.size/1024)} KB`;
+      });
+      box.appendChild(btn);
+    }
+  }
+  $("pickDocDir").addEventListener("click", async ()=>{
+    try{
+      docDirHandle = await window.showDirectoryPicker();
+      $("refreshDocs").disabled=false;
+      await listDocs();
+    }catch{}
+  });
+  $("refreshDocs").addEventListener("click", ()=>listDocs());
+  $("loadToSheet").addEventListener("click", ()=>{
+    $("docText").textContent = $("docPreview").value || "—";
+    floating(true);
+    $("hideSheet").disabled=false;
+    setStatus("monograph loaded");
+  });
+  $("hideSheet").addEventListener("click", ()=>floating(false));
+  $("showDocOnScreen").addEventListener("click", ()=>{ showView("screen"); floating(true); });
+
+  // App directory + window manager
+  let appDirHandle=null;
+  let appFiles=[];
+  async function listApps(){
+    appFiles=[];
+    if(!appDirHandle){ $("appList").textContent="No app directory selected."; return; }
+    for await (const [name, handle] of appDirHandle.entries()){
+      if(handle.kind==="file" && name.toLowerCase().endsWith(".html")){
+        appFiles.push({name, handle});
+      }
+    }
+    appFiles.sort((a,b)=>a.name.localeCompare(b.name));
+    const box=$("appList");
+    box.innerHTML = appFiles.length ? "" : "<div class='small'>No .html apps found.</div>";
+    for(const f of appFiles){
+      const row=document.createElement("div");
+      row.className="card";
+      row.style.boxShadow="none";
+      row.style.background="rgba(255,255,255,.03)";
+      row.innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+        <div><div style="font-weight:900">${esc(f.name)}</div><div class="small">Launch inside a resizable window.</div></div>
+        <div class="row"><button class="btn primary">Launch</button></div></div>`;
+      row.querySelector("button").addEventListener("click", ()=>launchAppWindow(f));
+      box.appendChild(row);
+    }
+  }
+  $("pickAppDir").addEventListener("click", async ()=>{
+    try{
+      appDirHandle = await window.showDirectoryPicker();
+      $("refreshApps").disabled=false;
+      await listApps();
+    }catch{}
+  });
+  $("refreshApps").addEventListener("click", ()=>listApps());
+
+  const winlayer=$("winlayer");
+  let winZ=10, winCount=0;
+  function getWinScale(){ return Number($("winScale").value || 0.55); }
+
+  async function launchAppWindow(app){
+    showView("screen");
+    const file = await app.handle.getFile();
+    const html = await file.text();
+    const url = URL.createObjectURL(new Blob([html], {type:"text/html"}));
+
+    const w=document.createElement("div");
+    w.className="win";
+    w.dataset.appName = app.name.toLowerCase();
+    w.style.zIndex=String(++winZ);
+
+    const host = $("workspace").getBoundingClientRect();
+    const s = getWinScale();
+    const baseW = Math.min(host.width*0.90, 560) * s;
+    const baseH = Math.min(host.height*0.62, 420) * s;
+
+    w.style.width = Math.max(240, baseW) + "px";
+    w.style.height = Math.max(210, baseH) + "px";
+    w.style.left = (16 + (winCount*18)%Math.max(1,(host.width-260))) + "px";
+    w.style.top  = (16 + (winCount*14)%Math.max(1,(host.height-220))) + "px";
+
+    w.innerHTML = `
+      <div class="wbar">
+        <div class="wtitle">${esc(app.name)}</div>
+        <div class="wbtns">
+          <button class="wbtn" data-act="min">Min</button>
+          <button class="wbtn" data-act="focus">Focus</button>
+          <button class="wbtn" data-act="close">Close</button>
+        </div>
+      </div>
+      <div class="wbody"><iframe sandbox="allow-scripts allow-forms allow-downloads allow-pointer-lock allow-popups" src="${url}"></iframe></div>
+      <div class="resizeHandle" title="resize"></div>
+    `;
+    winlayer.appendChild(w);
+    winCount++;
+
+    const bar=w.querySelector(".wbar");
+    let drag=false, ox=0, oy=0;
+    bar.addEventListener("pointerdown", (e)=>{
+      drag=true; w.style.zIndex=String(++winZ);
+      bar.setPointerCapture(e.pointerId);
+      const r=w.getBoundingClientRect();
+      ox=e.clientX-r.left; oy=e.clientY-r.top;
+      bar.style.cursor="grabbing";
+    });
+    bar.addEventListener("pointermove", (e)=>{
+      if(!drag) return;
+      const hostRect = $("workspace").getBoundingClientRect();
+      const x = Math.max(0, Math.min(hostRect.width - 120, e.clientX - hostRect.left - ox));
+      const y = Math.max(0, Math.min(hostRect.height - 60,  e.clientY - hostRect.top  - oy));
+      w.style.left = x + "px";
+      w.style.top  = y + "px";
+    });
+    bar.addEventListener("pointerup", ()=>{ drag=false; bar.style.cursor="grab"; });
+
+    const rh = w.querySelector(".resizeHandle");
+    let rs=false, rw=0, rh0=0, sx0=0, sy0=0;
+    rh.addEventListener("pointerdown", (e)=>{
+      rs=true; w.style.zIndex=String(++winZ);
+      rh.setPointerCapture(e.pointerId);
+      const r=w.getBoundingClientRect();
+      rw=r.width; rh0=r.height; sx0=e.clientX; sy0=e.clientY;
+    });
+    rh.addEventListener("pointermove", (e)=>{
+      if(!rs) return;
+      const dx=e.clientX-sx0, dy=e.clientY-sy0;
+      const hostRect = $("workspace").getBoundingClientRect();
+      const maxW = hostRect.width - parseFloat(w.style.left||"0") - 8;
+      const maxH = hostRect.height - parseFloat(w.style.top ||"0") - 8;
+      w.style.width = Math.max(220, Math.min(maxW, rw+dx)) + "px";
+      w.style.height= Math.max(180, Math.min(maxH, rh0+dy)) + "px";
+    });
+    rh.addEventListener("pointerup", ()=>{ rs=false; });
+
+    w.querySelector('[data-act="close"]').addEventListener("click", ()=>{ URL.revokeObjectURL(url); w.remove(); });
+    w.querySelector('[data-act="min"]').addEventListener("click", ()=>{
+      const body=w.querySelector(".wbody");
+      body.style.display = (body.style.display==="none") ? "block" : "none";
+    });
+    w.querySelector('[data-act="focus"]').addEventListener("click", ()=>{ w.style.zIndex=String(++winZ); });
+
+    return w;
+  }
+
+  function windows(){ return Array.from(winlayer.querySelectorAll(".win")); }
+  function closeAll(){
+    for(const w of windows()){
+      try{
+        const iframe = w.querySelector("iframe");
+        const src = iframe?.getAttribute("src") || "";
+        if(src.startsWith("blob:")) URL.revokeObjectURL(src);
+      }catch{}
+      w.remove();
+    }
+  }
+  function tile(){
+    const ws = $("workspace").getBoundingClientRect();
+    const list = windows();
+    const n=list.length;
+    if(!n) return;
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n/cols);
+    const pad=8;
+    const wW = (ws.width - pad*(cols+1))/cols;
+    const wH = (ws.height - pad*(rows+1))/rows;
+    list.forEach((w,i)=>{
+      const c = i%cols, r = Math.floor(i/cols);
+      w.style.left = (pad + c*(wW+pad)) + "px";
+      w.style.top  = (pad + r*(wH+pad)) + "px";
+      w.style.width = Math.max(220, wW) + "px";
+      w.style.height= Math.max(180, wH) + "px";
+      w.style.zIndex = String(++winZ);
+    });
+  }
+  function cascade(){
+    const ws = $("workspace").getBoundingClientRect();
+    const list=windows();
+    const pad=16;
+    list.forEach((w,i)=>{
+      const s=getWinScale();
+      w.style.width = Math.max(240, Math.min(ws.width*0.82, 560)*s) + "px";
+      w.style.height= Math.max(220, Math.min(ws.height*0.66, 420)*s) + "px";
+      w.style.left = (pad + (i*18)%Math.max(1,(ws.width-260))) + "px";
+      w.style.top  = (pad + (i*14)%Math.max(1,(ws.height-220))) + "px";
+      w.style.zIndex = String(++winZ);
+    });
+  }
+  safeTap($("tileBtn"), tile);
+  safeTap($("cascadeBtn"), cascade);
+  safeTap($("closeAllBtn"), closeAll);
+
+  // Snapshot
+  $("dockScreenshot").addEventListener("click", ()=>{
+    try{
+      const url = canvas.toDataURL("image/png");
+      const a=document.createElement("a");
+      a.href=url; a.download="photonos-snapshot.png"; a.click();
+    }catch{}
+  });
+
+  // AQAI
+  const ai = { enabled:false, auto:false, log:[], lastSample:null, lastTS:0, timer:null };
+  function aiWrite(msg){
+    const ta=$("aiOut");
+    ta.value = (ta.value ? ta.value + "\n" : "") + msg;
+    ta.scrollTop = ta.scrollHeight;
+    ai.log.push({t:Date.now(), msg});
+  }
+  function aiSetEnabled(on){
+    ai.enabled=!!on;
+    $("aiEnable").textContent = ai.enabled ? "Disable" : "Enable";
+    aiHud(ai.enabled ? (ai.auto ? "on • auto" : "on") : "disabled");
+    if(ai.enabled && !ai.timer) ai.timer=setInterval(aiTick, 450);
+    if(!ai.enabled && ai.timer){ clearInterval(ai.timer); ai.timer=null; }
+  }
+  function aiSetAuto(on){
+    ai.auto=!!on;
+    $("aiAuto").textContent = ai.auto ? "Auto-tune: on" : "Auto-tune: off";
+    aiHud(ai.enabled ? (ai.auto ? "on • auto" : "on") : "disabled");
+  }
+  $("aiEnable").addEventListener("click", ()=>aiSetEnabled(!ai.enabled));
+  $("aiAuto").addEventListener("click", ()=>aiSetAuto(!ai.auto));
+  $("aiClear").addEventListener("click", ()=>{ $("aiOut").value=""; ai.log=[]; });
+  $("aiDownload").addEventListener("click", ()=>{
+    const blob = new Blob([JSON.stringify({at:new Date().toISOString(), log:ai.log}, null, 2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download="photonos-aqai-log.json"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 1500);
+  });
+  $("aiHelp").addEventListener("click", ()=>{
+    aiWrite("Commands:\n- open <name>\n- tile | cascade | close all\n- summarize\n- search <term>\n- boost fps\n- quality up\n- calm | excite\n- mode poles|grid|noise\n- renderer gpu|cpu\n- turbo on|off\n- zen on|zen off");
+  });
+
+  function getDocTextPreferred(){
+    const p = ($("docPreview").value || "").trim();
+    if(p) return p;
+    const s = ($("docText").textContent || "").trim();
+    return s || "";
+  }
+  function summarizeText(txt){
+    const clean = txt.replace(/\s+/g," ").trim();
+    if(!clean) return "No document loaded.";
+    const sentences = clean.replace(/([\.\!\?])\s+/g,'$1\n').split(/\n+/).filter(s=>s.length>40);
+    const words = clean.toLowerCase().match(/[a-z0-9\u0600-\u06FF]+/g) || [];
+    const stop = new Set(["the","and","for","with","that","this","from","are","was","were","will","into","your","you","our","their","they","have","has","had","not","but","can","could","should","a","an","in","on","of","to","is","it","as","at","by","or"]);
+    const freq = new Map();
+    for(const w of words){
+      if(w.length<3) continue;
+      if(stop.has(w)) continue;
+      freq.set(w, (freq.get(w)||0)+1);
+    }
+    function scoreSent(s){
+      const ws = s.toLowerCase().match(/[a-z0-9\u0600-\u06FF]+/g) || [];
+      let sc=0;
+      for(const w of ws) sc += freq.get(w)||0;
+      return sc / Math.max(8, ws.length);
+    }
+    const ranked = sentences.map(s=>({s, sc:scoreSent(s)})).sort((a,b)=>b.sc-a.sc);
+    const pick = ranked.slice(0, Math.min(6, ranked.length)).map(x=>x.s.trim());
+    return pick.length ? pick.join("\n\n") : clean.slice(0, 900) + (clean.length>900?"…":"");
+  }
+  function searchText(txt, term){
+    term = (term||"").trim();
+    if(!term) return "Give a search term.";
+    const lines = txt.split(/\r?\n/);
+    const hits=[];
+    const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"), "ig");
+    for(let i=0;i<lines.length;i++){
+      if(re.test(lines[i])){ hits.push({i:i+1, line:lines[i]}); if(hits.length>=12) break; }
+    }
+    if(!hits.length) return `No hits for "${term}".`;
+    return hits.map(h=>`${String(h.i).padStart(4,"0")}: ${h.line.slice(0,220)}`).join("\n");
+  }
+  async function openAppByName(q){
+    q=(q||"").toLowerCase().trim();
+    if(!q) return "Provide an app name substring.";
+    if(!appFiles.length) return "No app directory loaded. Go to Apps → Pick App Directory.";
+    const hit = appFiles.find(a=>a.name.toLowerCase().includes(q));
+    if(!hit) return `No app matched "${q}".`;
+    await launchAppWindow(hit);
+    return `Opened: ${hit.name}`;
+  }
+
+  // Canvas sampling
+  const sampleC = document.createElement("canvas");
+  const sampleCtx = sampleC.getContext("2d", {willReadFrequently:true});
+  sampleC.width=96; sampleC.height=96;
+
+  function sampleCanvas(){
+    sampleCtx.drawImage(canvas, 0,0, sampleC.width, sampleC.height);
+    const img = sampleCtx.getImageData(0,0,sampleC.width, sampleC.height).data;
+    let sum=0, sum2=0, edge=0;
+    for(let y=1;y<sampleC.height-1;y++){
+      for(let x=1;x<sampleC.width-1;x++){
+        const i = (y*sampleC.width + x)*4;
+        const r=img[i], g=img[i+1], b=img[i+2];
+        const v = (0.2126*r + 0.7152*g + 0.0722*b)/255;
+        sum += v; sum2 += v*v;
+        const il = i-4, ir=i+4, iu=i-sampleC.width*4, id=i+sampleC.width*4;
+        const vl = (0.2126*img[il] + 0.7152*img[il+1] + 0.0722*img[il+2])/255;
+        const vr = (0.2126*img[ir] + 0.7152*img[ir+1] + 0.0722*img[ir+2])/255;
+        const vu = (0.2126*img[iu] + 0.7152*img[iu+1] + 0.0722*img[iu+2])/255;
+        const vd = (0.2126*img[id] + 0.7152*img[id+1] + 0.0722*img[id+2])/255;
+        edge += Math.abs(vr-vl) + Math.abs(vd-vu);
+      }
+    }
+    const n=(sampleC.width-2)*(sampleC.height-2);
+    const mean = sum/n;
+    const varr = Math.max(0, sum2/n - mean*mean);
+    const std = Math.sqrt(varr);
+    const edgeN = edge/n;
+
+    let motion=0;
+    if(ai.lastSample){
+      const prev=ai.lastSample;
+      for(let i=0;i<img.length;i+=16){
+        motion += Math.abs(img[i]-prev[i]);
+      }
+      motion = motion / (img.length/16) / 255;
+    }
+    ai.lastSample = new Uint8ClampedArray(img);
+    return {mean, std, edge:edgeN, motion, img};
+  }
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+
+  function adjustForUsefulness(m){
+    let speed = Number($("speed").value);
+    let gain = Number($("gain").value);
+    let scale = Number($("renderScale").value);
+    const mode = $("modeSel").value;
+    const fps = parseFloat($("fps").textContent)||0;
+
+    if(fps && fps < 18 && scale > 0.20){
+      scale = Math.max(0.20, scale - 0.10);
+      $("renderScale").value = String(scale);
+      resizeAll();
+      aiWrite(`Auto: lowered render scale → ${scale.toFixed(2)} (fps ${fps.toFixed(1)})`);
+      return;
+    }
+    if(m.motion > 0.14 || m.std > 0.30){
+      speed = Math.max(0.55, speed - 0.10);
+      gain  = Math.max(0.55, gain  - 0.05);
+      $("speed").value = speed.toFixed(2);
+      $("gain").value  = gain.toFixed(2);
+      if(mode === "noise"){ $("modeSel").value = "poles"; aiWrite("Auto: switched mode noise → poles"); }
+      aiWrite(`Auto: calmed (motion=${m.motion.toFixed(3)}) speed=${speed.toFixed(2)} gain=${gain.toFixed(2)}`);
+      return;
+    }
+    if(m.motion < 0.02 && m.edge < 0.025){
+      speed = Math.min(1.60, speed + 0.10);
+      $("speed").value = speed.toFixed(2);
+      aiWrite(`Auto: excited (motion=${m.motion.toFixed(3)}) speed=${speed.toFixed(2)}`);
+      return;
+    }
+    if(m.mean < 0.28 && gain < 1.10){
+      gain = Math.min(1.10, gain + 0.05);
+      $("gain").value = gain.toFixed(2);
+      return;
+    }
+    if(m.mean > 0.78 && gain > 0.55){
+      gain = Math.max(0.55, gain - 0.05);
+      $("gain").value = gain.toFixed(2);
+      return;
+    }
+  }
+
+  function aiTick(){
+    if(!ai.enabled) return;
+    if(!running) $("startRender").click();
+    const m = sampleCanvas();
+    $("aiMetrics").textContent =
+      `mean=${m.mean.toFixed(3)}\nstd=${m.std.toFixed(3)}\nedge=${m.edge.toFixed(3)}\nmotion=${m.motion.toFixed(3)}\nmode=${$("modeSel").value}\nrenderer=${$("rendererSel").value}\nrenderScale=${Number($("renderScale").value).toFixed(2)}`;
+    aiHud(ai.auto ? `on • auto (motion ${m.motion.toFixed(3)})` : `on (motion ${m.motion.toFixed(3)})`);
+    if(ai.auto){
+      const now=performance.now();
+      if(now - ai.lastTS > 900){
+        ai.lastTS = now;
+        adjustForUsefulness(m);
+      }
+    }
+  }
+
+  async function runCommand(raw){
+    const cmd=(raw||"").trim();
+    if(!cmd) return;
+    const lc=cmd.toLowerCase();
+
+    if(lc==="tile"){ tile(); aiWrite("Tiled windows."); return; }
+    if(lc==="cascade"){ cascade(); aiWrite("Cascaded windows."); return; }
+    if(lc==="close all"){ closeAll(); aiWrite("Closed all windows."); return; }
+    if(lc.startsWith("open ")){ aiWrite(await openAppByName(cmd.slice(5))); return; }
+    if(lc==="summarize"){ aiWrite(summarizeText(getDocTextPreferred())); return; }
+    if(lc.startsWith("search ")){ aiWrite(searchText(getDocTextPreferred(), cmd.slice(7))); return; }
+    if(lc==="boost fps"){
+      const s=Number($("renderScale").value);
+      const ns = Math.max(0.20, s-0.10);
+      $("renderScale").value=String(ns);
+      resizeAll();
+      aiWrite(`Render scale → ${ns.toFixed(2)} (faster)`);
+      return;
+    }
+    if(lc==="quality up"){
+      const s=Number($("renderScale").value);
+      const ns = Math.min(1.0, s+0.10);
+      $("renderScale").value=String(ns);
+      resizeAll();
+      aiWrite(`Render scale → ${ns.toFixed(2)} (higher quality)`);
+      return;
+    }
+    if(lc==="calm"){
+      $("speed").value = String(clamp(Number($("speed").value)-0.15, 0.55, 2.0).toFixed(2));
+      $("gain").value  = String(clamp(Number($("gain").value )-0.10, 0.55, 1.2).toFixed(2));
+      aiWrite("Calmed: reduced speed + gain.");
+      return;
+    }
+    if(lc==="excite"){
+      $("speed").value = String(clamp(Number($("speed").value)+0.15, 0.55, 2.0).toFixed(2));
+      aiWrite("Excited: increased speed.");
+      return;
+    }
+    if(lc.startsWith("mode ")){
+      const m = lc.slice(5).trim();
+      if(["poles","grid","noise"].includes(m)){ $("modeSel").value=m; aiWrite(`Mode → ${m}`); }
+      else aiWrite("Unknown mode. Use: mode poles|grid|noise");
+      return;
+    }
+    if(lc.startsWith("renderer ")){
+      const r = lc.slice(9).trim();
+      if(["gpu","cpu"].includes(r)){ $("rendererSel").value=r; ensureGL(); resizeAll(); aiWrite(`Renderer → ${r}`); }
+      else aiWrite("Unknown renderer. Use: renderer gpu|cpu");
+      return;
+    }
+    if(lc==="turbo on"){ setTurbo(true); aiWrite("Turbo enabled."); return; }
+    if(lc==="turbo off"){ setTurbo(false); aiWrite("Turbo disabled."); return; }
+    if(lc==="zen on"){ zen=true; appRoot.classList.add("zen"); setTimeout(resizeAll,60); aiWrite("Zen on."); return; }
+    if(lc==="zen off"){ zen=false; appRoot.classList.remove("zen"); setTimeout(resizeAll,60); aiWrite("Zen off."); return; }
+
+    aiWrite("Unknown command. Press Commands for the list.");
+  }
+
+  $("aiRun").addEventListener("click", ()=>{ runCommand($("aiCmd").value); $("aiCmd").value=""; });
+  $("aiCmd").addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); $("aiRun").click(); } });
+
+  // Enable agent by default
+  aiSetEnabled(true);
+  aiSetAuto(false);
+  aiWrite("AQAI ready. Try: open <app>, summarize, search <term>, turbo on, renderer gpu.");
+
+  // AQC Turbo
+  const aqc = { turbo:false, gov:true, hist:[], timer:null };
+  function setTurbo(on){
+    aqc.turbo=!!on;
+    $("aqcTurbo").textContent = aqc.turbo ? "Disable Turbo" : "Enable Turbo";
+    $("aqcStatus").textContent = aqc.turbo ? "Turbo on: GPU renderer + prime pole preset + governor optional." : "Turbo off.";
+    if(aqc.turbo){
+      $("modeSel").value="poles";
+      $("rendererSel").value="gpu";
+      ensureGL();
+      applyPreset($("aqcPreset").value);
+      if(!aqc.timer) aqc.timer=setInterval(aqcTick, 550);
+    } else {
+      if(aqc.timer){ clearInterval(aqc.timer); aqc.timer=null; }
+    }
+    resizeAll();
+  }
+  $("aqcTurbo").addEventListener("click", ()=>setTurbo(!aqc.turbo));
+  $("aqcGov").addEventListener("click", ()=>{
+    aqc.gov=!aqc.gov;
+    $("aqcGov").textContent = aqc.gov ? "Governor: on" : "Governor: off";
+  });
+  $("aqcPreset").addEventListener("change", ()=>{ if(aqc.turbo) applyPreset($("aqcPreset").value); });
+
+  function applyPreset(name){
+    if(name==="prime3"){ $("poleN").value="3"; $("seed").value="2,3,5"; }
+    else if(name==="prime5"){ $("poleN").value="5"; $("seed").value="2,3,5,7,11"; }
+    else if(name==="prime8"){ $("poleN").value="8"; $("seed").value="2,3,5,7,11,13,17,19"; }
+    else { $("poleN").value="12"; $("seed").value="2,3,5,7,11,13,17,19,23,29,31,37"; }
+    initPoles();
+  }
+
+  function aqcTick(){
+    if(!aqc.turbo) return;
+    if(!running) $("startRender").click();
+
+    const fps = parseFloat($("fps").textContent)||0;
+    const target = Number($("aqcTargetFps").value)||28;
+    const maxScale = Number($("aqcMaxScale").value)||0.5;
+    const scale = Number($("renderScale").value)||0.35;
+
+    if(aqc.gov && fps>0){
+      if(fps > target+6 && scale < maxScale){
+        const ns = Math.min(maxScale, scale + 0.10);
+        $("renderScale").value = String(ns);
+        resizeAll();
+      } else if(fps < target-6 && scale > 0.20){
+        const ns = Math.max(0.20, scale - 0.10);
+        $("renderScale").value = String(ns);
+        resizeAll();
+      }
+    }
+
+    const m = sampleCanvas();
+    aqc.hist.push({t:performance.now(), mean:m.mean, std:m.std, edge:m.edge, motion:m.motion});
+    if(aqc.hist.length>2048) aqc.hist.splice(0, aqc.hist.length-2048);
+
+    $("aqcStatus").textContent =
+      `Turbo on. fps=${fps?fps.toFixed(1):"—"} target=${target}\nrenderScale=${Number($("renderScale").value).toFixed(2)} (max ${maxScale.toFixed(2)})\nmean=${m.mean.toFixed(3)} std=${m.std.toFixed(3)} edge=${m.edge.toFixed(3)} motion=${m.motion.toFixed(3)}`;
+  }
+
+  function getSeries(n){
+    const h = aqc.hist;
+    const m = Math.min(n, h.length);
+    const y = new Float32Array(m);
+    for(let i=0;i<m;i++){
+      const p = h[h.length-m+i];
+      y[i] = 0.55*p.mean + 0.30*p.edge + 0.15*p.motion;
+    }
+    return y;
+  }
+  function lockin(y){
+    const n=y.length;
+    let s=0,c=0;
+    for(let i=0;i<n;i++){
+      const ph = 2*Math.PI*i/n;
+      s += y[i]*Math.sin(ph);
+      c += y[i]*Math.cos(ph);
+    }
+    s/=n; c/=n;
+    const amp=Math.sqrt(s*s+c*c);
+    const ph=Math.atan2(s,c);
+    return {amp, ph};
+  }
+  function phaseDrift(y){
+    const n=y.length;
+    let num=0, den=0;
+    for(let i=1;i<n;i++){
+      num += y[i]*y[i-1];
+      den += y[i]*y[i];
+    }
+    const corr = num/Math.max(1e-9, den);
+    return {corr};
+  }
+  function spectrum(y, bins=16){
+    const n=y.length;
+    const out=[];
+    for(let k=1;k<=bins;k++){
+      let re=0, im=0;
+      for(let i=0;i<n;i++){
+        const ph = 2*Math.PI*k*i/n;
+        re += y[i]*Math.cos(ph);
+        im -= y[i]*Math.sin(ph);
+      }
+      re/=n; im/=n;
+      out.push({k, mag:Math.sqrt(re*re+im*im)});
+    }
+    return out;
+  }
+
+  $("aqcOpsRun").addEventListener("click", ()=>{
+    const n = Math.max(64, Math.min(1024, Number($("aqcWindow").value)||256));
+    const y = getSeries(n);
+    if(y.length<64){ $("aqcOut").textContent="Not enough history yet. Enable Turbo and wait ~2 seconds."; return; }
+    const op=$("aqcOp").value;
+    if(op==="lockin"){
+      const r=lockin(y);
+      $("aqcOut").textContent = `Lock-in:\namp=${r.amp.toFixed(6)}\nphase(rad)=${r.ph.toFixed(6)}\nphase(deg)=${(r.ph*180/Math.PI).toFixed(2)}`;
+    } else if(op==="phase"){
+      const r=phaseDrift(y);
+      $("aqcOut").textContent = `Phase drift proxy:\ncorr=${r.corr.toFixed(6)}\n(closer to 1 = steadier)`;
+    } else {
+      const sp=spectrum(y, 16);
+      const lines=sp.map(o=>`${String(o.k).padStart(2,"0")}: ${o.mag.toFixed(6)}`);
+      $("aqcOut").textContent = `Mini spectrum (16 bins):\n`+lines.join("\n");
+    }
+  });
+
+  // Linux runner (v86 loader)
+  let linux = { bundleDir:null, isoFile:null, v86Loaded:false, v86ScriptUrl:null, wasmUrl:null, emu:null, win:null };
+
+  function linuxLog(msg){
+    const box=$("linuxStatus");
+    box.textContent = (box.textContent ? box.textContent + "\n" : "") + msg;
+  }
+
+  async function injectScriptFromFile(file){
+    const txt = await file.text();
+    const blob = new Blob([txt], {type:"text/javascript"});
+    const url = URL.createObjectURL(blob);
+    const s=document.createElement("script");
+    s.src=url;
+    await new Promise((res,rej)=>{
+      s.onload=()=>res();
+      s.onerror=()=>rej(new Error("script load failed"));
+      document.head.appendChild(s);
+    });
+    return url;
+  }
+
+  async function pickV86Bundle(){
+    try{
+      const dir = await window.showDirectoryPicker();
+      linux.bundleDir = dir;
+      let jsHandle=null, wasmHandle=null;
+      for await (const [name, handle] of dir.entries()){
+        if(handle.kind!=="file") continue;
+        const low=name.toLowerCase();
+        if(low==="v86.js") jsHandle=handle;
+        if(low==="v86.wasm") wasmHandle=handle;
+      }
+      if(!jsHandle || !wasmHandle){
+        linuxLog("Missing v86.js or v86.wasm in selected folder.");
+        return;
+      }
+      const jsFile = await jsHandle.getFile();
+      const wasmFile = await wasmHandle.getFile();
+
+      linuxLog("Loading v86.js …");
+      linux.v86ScriptUrl = await injectScriptFromFile(jsFile);
+      linux.v86Loaded = true;
+
+      linux.wasmUrl = URL.createObjectURL(wasmFile);
+
+      linuxLog("v86 loaded. Now pick ISO.");
+      $("linuxStart").disabled = !linux.isoFile;
+    }catch{}
+  }
+
+  async function pickIso(){
+    try{
+      const [h] = await window.showOpenFilePicker({
+        multiple:false,
+        types:[{description:"ISO", accept:{"application/octet-stream":[".iso"]}}]
+      });
+      const f = await h.getFile();
+      linux.isoFile = f;
+      linuxLog(`ISO selected: ${f.name} (${Math.round(f.size/1024/1024)} MB)`);
+      $("linuxStart").disabled = !(linux.v86Loaded && linux.isoFile);
+    }catch{}
+  }
+
+  $("linuxPickBundle").addEventListener("click", pickV86Bundle);
+  $("linuxPickIso").addEventListener("click", pickIso);
+
+  function stopLinux(){
+    try{
+      if(linux.emu && typeof linux.emu.stop === "function") linux.emu.stop();
+    }catch{}
+    linux.emu=null;
+    if(linux.win){ linux.win.remove(); linux.win=null; }
+    $("linuxStop").disabled=true;
+    $("linuxStart").disabled = !(linux.v86Loaded && linux.isoFile);
+    setStatus("linux stopped");
+    linuxLog("Stopped.");
+  }
+
+  async function startLinux(){
+    try{
+      if(!linux.v86Loaded || !linux.isoFile){
+        linuxLog("Pick v86 bundle + ISO first.");
+        return;
+      }
+      if(typeof V86Starter === "undefined"){
+        linuxLog("v86 not available (V86Starter missing). Check your bundle.");
+        return;
+      }
+
+      showView("screen");
+      if(linux.win) { linux.win.remove(); linux.win=null; }
+      const w = document.createElement("div");
+      w.className="win";
+      w.style.zIndex=String(++winZ);
+      w.style.width="min(860px, 92vw)";
+      w.style.height="min(560px, 76vh)";
+      w.style.left="14px";
+      w.style.top="14px";
+      w.innerHTML = `
+        <div class="wbar">
+          <div class="wtitle">Linux (v86)</div>
+          <div class="wbtns">
+            <button class="wbtn" data-act="focus">Focus</button>
+            <button class="wbtn" data-act="close">Close</button>
+          </div>
+        </div>
+        <div class="wbody" style="display:flex;flex-direction:column;gap:8px;padding:8px">
+          <div class="small mono" id="linuxWinInfo">booting…</div>
+          <div id="linuxScreen" style="flex:1;min-height:0;background:#000;border:1px solid rgba(255,255,255,.12);border-radius:12px;overflow:hidden"></div>
+        </div>
+        <div class="resizeHandle" title="resize"></div>
+      `;
+      winlayer.appendChild(w);
+      linux.win=w;
+
+      const bar=w.querySelector(".wbar");
+      let drag=false, ox=0, oy=0;
+      bar.addEventListener("pointerdown", (e)=>{
+        drag=true; w.style.zIndex=String(++winZ);
+        bar.setPointerCapture(e.pointerId);
+        const r=w.getBoundingClientRect();
+        ox=e.clientX-r.left; oy=e.clientY-r.top;
+      });
+      bar.addEventListener("pointermove", (e)=>{
+        if(!drag) return;
+        const hostRect = $("workspace").getBoundingClientRect();
+        const x = Math.max(0, Math.min(hostRect.width - 120, e.clientX - hostRect.left - ox));
+        const y = Math.max(0, Math.min(hostRect.height - 60,  e.clientY - hostRect.top  - oy));
+        w.style.left = x + "px";
+        w.style.top  = y + "px";
+      });
+      bar.addEventListener("pointerup", ()=>{ drag=false; });
+
+      const rh = w.querySelector(".resizeHandle");
+      let rs=false, rw=0, rh0=0, sx0=0, sy0=0;
+      rh.addEventListener("pointerdown", (e)=>{
+        rs=true; w.style.zIndex=String(++winZ);
+        rh.setPointerCapture(e.pointerId);
+        const r=w.getBoundingClientRect();
+        rw=r.width; rh0=r.height; sx0=e.clientX; sy0=e.clientY;
+      });
+      rh.addEventListener("pointermove", (e)=>{
+        if(!rs) return;
+        const dx=e.clientX-sx0, dy=e.clientY-sy0;
+        const hostRect = $("workspace").getBoundingClientRect();
+        const maxW = hostRect.width - parseFloat(w.style.left||"0") - 8;
+        const maxH = hostRect.height - parseFloat(w.style.top ||"0") - 8;
+        w.style.width = Math.max(420, Math.min(maxW, rw+dx)) + "px";
+        w.style.height= Math.max(320, Math.min(maxH, rh0+dy)) + "px";
+      });
+      rh.addEventListener("pointerup", ()=>{ rs=false; });
+
+      w.querySelector('[data-act="focus"]').addEventListener("click", ()=>{ w.style.zIndex=String(++winZ); });
+      w.querySelector('[data-act="close"]').addEventListener("click", ()=>{ stopLinux(); });
+
+      const screenEl = w.querySelector("#linuxScreen");
+      const infoEl = w.querySelector("#linuxWinInfo");
+
+      const isoUrl = URL.createObjectURL(linux.isoFile);
+      const ram = Math.max(128, Math.min(1024, Number($("linuxRam").value)||256));
+      const vga = ($("linuxVga").value === "true");
+
+      linuxLog("Starting emulator …");
+      infoEl.textContent = `RAM=${ram}MB VGA=${vga} ISO=${linux.isoFile.name}`;
+
+      linux.emu = new V86Starter({
+        wasm_path: linux.wasmUrl,
+        memory_size: ram*1024*1024,
+        vga_memory_size: 8*1024*1024,
+        cdrom: { url: isoUrl },
+        autostart: true,
+        screen_container: screenEl,
+        disable_keyboard: false,
+        disable_mouse: false,
+        vga: vga
+      });
+
+      $("linuxStart").disabled=true;
+      $("linuxStop").disabled=false;
+      setStatus("linux running");
+
+    }catch(e){
+      linuxLog("Start failed: "+String(e && e.message || e));
+    }
+  }
+
+  $("linuxStart").addEventListener("click", startLinux);
+  $("linuxStop").addEventListener("click", stopLinux);
+
+  // Wire window manager buttons
+  safeTap($("tileBtn"), tile);
+  safeTap($("cascadeBtn"), cascade);
+  safeTap($("closeAllBtn"), closeAll);
+
+  // AQC turbo toggle via AQAI commands
+  function setTurbo(on){
+    aqc.turbo=!!on;
+    $("aqcTurbo").textContent = aqc.turbo ? "Disable Turbo" : "Enable Turbo";
+    $("aqcStatus").textContent = aqc.turbo ? "Turbo on: GPU renderer + prime pole preset + governor optional." : "Turbo off.";
+    if(aqc.turbo){
+      $("modeSel").value="poles";
+      $("rendererSel").value="gpu";
+      ensureGL();
+      applyPreset($("aqcPreset").value);
+      if(!aqc.timer) aqc.timer=setInterval(aqcTick, 550);
+    } else {
+      if(aqc.timer){ clearInterval(aqc.timer); aqc.timer=null; }
+    }
+    resizeAll();
+  }
+
+  // Dock view shortcuts
+  safeTap($("dockApps"), ()=>showView("apps"));
+  safeTap($("dockAI"), ()=>showView("ai"));
+  safeTap($("dockLinux"), ()=>showView("linux"));
+
+  // Set initial view
+  showView("screen");
+
+})();</script>
+</body>
+</html>
