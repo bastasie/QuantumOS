@@ -1,0 +1,1272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Calculator Atom • Open Emu (Fixed Boot)</title>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;height:100%;}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none;}
+  input[type=file]{display:none;}
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<input id="fileCart" type="file" accept=".json,application/json,.ch8,.c8,.rom,application/octet-stream"/>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("screen");
+  const fileCart = document.getElementById("fileCart");
+
+  // Context fallback (some mobile browsers reject options)
+  let ctx = null;
+  try { ctx = canvas.getContext("2d", { alpha:false, desynchronized:true }); }
+  catch { ctx = canvas.getContext("2d"); }
+  if(!ctx){ alert("Canvas 2D context unavailable."); return; }
+
+  // Global error overlay
+  let fatalError = null;
+  window.addEventListener("error", (e)=>{
+    fatalError = (e && e.error && e.error.stack) ? e.error.stack : (e && e.message ? e.message : "Unknown error");
+  });
+  window.addEventListener("unhandledrejection", (e)=>{
+    fatalError = (e && e.reason && e.reason.stack) ? e.reason.stack : String(e.reason || "Unhandled rejection");
+  });
+
+  let W=0,H=0,DPR=1;
+
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const now=()=>performance.now();
+  const rand=(a=0,b=1)=>a+(b-a)*Math.random();
+
+  // =========================
+  // GIF-screen field
+  // =========================
+  let GW=0,GH=0,scale=1;
+  let A,B,C,A2,B2,C2;
+  let off,offCtx,img,px;
+
+  function idx(x,y){return y*GW+x;}
+  function lap(arr,x,y){
+    const i=idx(x,y), v=arr[i];
+    return (arr[i-1]+arr[i+1]+arr[i-GW]+arr[i+GW]-4*v);
+  }
+
+  function splash(xpx,ypx,rpx,str){
+    if(!A) return;
+    const gx=Math.floor((xpx/W)*GW);
+    const gy=Math.floor((ypx/H)*GH);
+    const rr=Math.max(2, Math.floor((rpx/Math.min(W,H))*Math.min(GW,GH)));
+    const r2=rr*rr;
+    for(let y=gy-rr;y<=gy+rr;y++){
+      if(y<1||y>=GH-1) continue;
+      for(let x=gx-rr;x<=gx+rr;x++){
+        if(x<1||x>=GW-1) continue;
+        const dx=x-gx, dy=y-gy;
+        if(dx*dx+dy*dy>r2) continue;
+        const i=idx(x,y);
+        const bump=str*(1-(dx*dx+dy*dy)/r2);
+        A[i]=clamp(A[i]+0.38*bump,0,1);
+        B[i]=clamp(B[i]+0.25*bump,0,1);
+        C[i]=clamp(C[i]+0.18*bump,0,1);
+      }
+    }
+  }
+
+  function initGrid(){
+    // W/H must be valid
+    if(!(W>0 && H>0)) return;
+
+    const target = clamp(Math.floor(Math.min(W,H)*0.92), 220, 360);
+    GW = target;
+
+    // robust ratio (avoid division by 0)
+    const ratio = (W>0) ? (H/W) : 1;
+    GH = clamp(Math.floor(target*ratio), 220, 620);
+
+    A=new Float32Array(GW*GH);
+    B=new Float32Array(GW*GH);
+    C=new Float32Array(GW*GH);
+    A2=new Float32Array(GW*GH);
+    B2=new Float32Array(GW*GH);
+    C2=new Float32Array(GW*GH);
+
+    for(let i=0;i<A.length;i++){
+      A[i]=0.14+0.10*Math.random();
+      B[i]=0.10+0.10*Math.random();
+      C[i]=0.06+0.10*Math.random();
+    }
+
+    off=document.createElement("canvas");
+    off.width=GW; off.height=GH;
+    offCtx=off.getContext("2d",{alpha:false});
+    img=offCtx.createImageData(GW,GH);
+    px=img.data;
+
+    scale = Math.min(W/GW, H/GH);
+
+    for(let k=0;k<10;k++) splash(Math.random()*W, Math.random()*H, 18+Math.random()*62, 1.0);
+  }
+
+  function resize(){
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio||1));
+    W = Math.max(1, Math.floor(window.innerWidth));
+    H = Math.max(1, Math.floor(window.innerHeight));
+    canvas.width = Math.floor(W*DPR);
+    canvas.height = Math.floor(H*DPR);
+    canvas.style.width = W+"px";
+    canvas.style.height = H+"px";
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    initGrid();
+  }
+  window.addEventListener("resize", resize, {passive:true});
+  window.addEventListener("orientationchange", () => setTimeout(resize, 50), {passive:true});
+
+  // =========================
+  // PPU + pole bank
+  // =========================
+  const PPU={
+    coherence:0.80,
+    smooth:0.18,
+    temperature:0.92,
+    entropy:0.15,
+    poles:new Float32Array(12),
+    poleVel:new Float32Array(12),
+  };
+
+  function ppuStep(dt){
+    for(let i=0;i<PPU.poles.length;i++){
+      const w=1.55+0.16*i;
+      const damp=0.085+0.004*i;
+      const drive=0.13*Math.sin(0.001*now()*(1+i*0.08));
+      const k=0.8+0.95*(1-PPU.coherence);
+      const acc=-w*w*PPU.poles[i]-damp*PPU.poleVel[i]+drive-0.22*k*PPU.poles[i];
+      PPU.poleVel[i]+=acc*dt;
+      PPU.poles[i]+=PPU.poleVel[i]*dt;
+    }
+    let E=0;
+    for(let i=0;i<PPU.poles.length;i++) E+=PPU.poles[i]*PPU.poles[i]+0.2*PPU.poleVel[i]*PPU.poleVel[i];
+    PPU.entropy=clamp(E/PPU.poles.length,0,1);
+
+    const targetTemp=0.55+0.75*PPU.coherence;
+    PPU.temperature=clamp(PPU.temperature+(targetTemp-PPU.temperature)*0.05,0.2,1.8);
+    const targetSmooth=0.10+0.58*(1-PPU.coherence);
+    PPU.smooth=clamp(PPU.smooth+(targetSmooth-PPU.smooth)*0.05,0.05,0.88);
+  }
+
+  // =========================
+  // Minimal UI (kept identical)
+  // =========================
+  const rect=(x,y,w,h)=>({x,y,w,h});
+  const hit=(r,px,py)=>(px>=r.x && px<=r.x+r.w && py>=r.y && py<=r.y+r.h);
+
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){
+    if(w<2*r) r=w/2;
+    if(h<2*r) r=h/2;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+
+  function button(x,y,w,h,label,active=false,small=false){
+    ctx.save();
+    ctx.fillStyle = active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.07)";
+    ctx.strokeStyle = active ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.16)";
+    ctx.lineWidth=1;
+    roundRect(ctx,x,y,w,h,10,true,true);
+    ctx.fillStyle="rgba(255,255,255,0.92)";
+    ctx.font = (small? "12px":"14px") + " system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="middle";
+    ctx.fillText(label, x+10, y+h/2);
+    ctx.restore();
+  }
+
+  const TabBar = {h:44};
+  const UI = { tab:"HOME", log:[], fps:60, frameMs:16, lastBench:null };
+  function logLine(s){
+    UI.log.push("[" + new Date().toLocaleTimeString() + "] " + s);
+    if(UI.log.length>16) UI.log.shift();
+  }
+
+  const Input = {
+    pointers:new Map(),
+    keys:{up:false,down:false,left:false,right:false,a:false,b:false,start:false,select:false},
+    profile:"DualShock",
+  };
+  function clearKeys(){ for(const k in Input.keys) Input.keys[k]=false; }
+
+  function ctrlLayout(){
+    const pad=12;
+    const size = Math.min(W,H)*0.20;
+    const bottom = H - TabBar.h - pad;
+    const dpad = rect(pad, bottom-size, size, size);
+    const btns = rect(W-pad-size, bottom-size, size, size);
+    const midY = bottom-size-52;
+    const start = rect(W*0.5-60, midY, 120, 38);
+    const select = rect(W*0.5-140, midY, 78, 38);
+    return {dpad,btns,start,select,size,pad,bottom,midY};
+  }
+  function classifyZone(x,y){
+    const L=ctrlLayout();
+    if(hit(L.dpad,x,y)) return "dpad";
+    if(hit(L.btns,x,y)) return "btns";
+    if(hit(L.start,x,y)) return "start";
+    if(hit(L.select,x,y)) return "select";
+    return "none";
+  }
+  function updateKeysFromPointers(){
+    clearKeys();
+    const L=ctrlLayout();
+    for(const p of Input.pointers.values()){
+      const x=p.x, y=p.y, z=p.zone;
+      if(z==="dpad"){
+        const cx=L.dpad.x+L.dpad.w/2, cy=L.dpad.y+L.dpad.h/2;
+        const dx=x-cx, dy=y-cy;
+        Input.keys.left = Input.keys.left || (dx < -L.dpad.w*0.12 && Math.abs(dx)>Math.abs(dy));
+        Input.keys.right= Input.keys.right|| (dx >  L.dpad.w*0.12 && Math.abs(dx)>Math.abs(dy));
+        Input.keys.up   = Input.keys.up   || (dy < -L.dpad.h*0.12 && Math.abs(dy)>Math.abs(dx));
+        Input.keys.down = Input.keys.down || (dy >  L.dpad.h*0.12 && Math.abs(dy)>Math.abs(dx));
+      } else if(z==="btns"){
+        const cx=L.btns.x+L.btns.w/2, cy=L.btns.y+L.btns.h/2;
+        const dx=x-cx, dy=y-cy;
+        Input.keys.a = Input.keys.a || (dx > 0 && Math.abs(dx)>Math.abs(dy));
+        Input.keys.b = Input.keys.b || (dy > 0 && Math.abs(dy)>Math.abs(dx));
+      } else if(z==="start") Input.keys.start=true;
+      else if(z==="select") Input.keys.select=true;
+    }
+  }
+  function tabLayout(){
+    const pad=10, tabH=TabBar.h;
+    const w=(W-2*pad)/5;
+    const y = H-tabH;
+    const tabs=[
+      {name:"HOME", r:rect(pad+w*0, y, w, tabH)},
+      {name:"CONSOLE", r:rect(pad+w*1, y, w, tabH)},
+      {name:"CARTS", r:rect(pad+w*2, y, w, tabH)},
+      {name:"BENCH", r:rect(pad+w*3, y, w, tabH)},
+      {name:"PPU", r:rect(pad+w*4, y, w, tabH)},
+    ];
+    return {pad,tabH,tabs};
+  }
+
+  function cycleProfile(){
+    const p=Input.profile;
+    Input.profile = (p==="DualShock") ? "Nintendo" : (p==="Nintendo" ? "Sega" : "DualShock");
+    logLine("profile: " + Input.profile + " (labels only)");
+  }
+
+  // =========================
+  // CHIP-8 emulator (unchanged)
+  // =========================
+  const Chip8 = {
+    mem:new Uint8Array(4096), V:new Uint8Array(16), I:0, pc:0x200,
+    stack:new Uint16Array(16), sp:0, dt:0, st:0,
+    keys:new Uint8Array(16), gfx:new Uint8Array(64*32),
+    cyclesPerFrame:10, quirks:{ shiftLegacy:false, loadStoreIncrement:true },
+    running:false, romName:"(none)",
+  };
+  const CHIP8_FONT = new Uint8Array([
+    0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70,
+    0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+    0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0,
+    0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+    0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0,
+    0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+    0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0,
+    0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80
+  ]);
+  function chip8Reset(){
+    Chip8.mem.fill(0); Chip8.V.fill(0); Chip8.gfx.fill(0);
+    Chip8.I=0; Chip8.pc=0x200; Chip8.stack.fill(0); Chip8.sp=0;
+    Chip8.dt=0; Chip8.st=0; Chip8.keys.fill(0);
+    Chip8.mem.set(CHIP8_FONT, 0x50);
+    Chip8.running=true;
+  }
+  function chip8LoadROM(bytes, name="ROM"){
+    chip8Reset();
+    const maxLen = Math.min(bytes.length, 4096-0x200);
+    Chip8.mem.set(bytes.subarray(0,maxLen), 0x200);
+    Chip8.romName = name.slice(0,64);
+    logLine("chip8: loaded " + Chip8.romName + " ("+maxLen+" bytes)");
+  }
+  function chip8KeyMap(){
+    Chip8.keys.fill(0);
+    if(Input.keys.up) Chip8.keys[0x8]=1;
+    if(Input.keys.down) Chip8.keys[0x2]=1;
+    if(Input.keys.left) Chip8.keys[0x4]=1;
+    if(Input.keys.right) Chip8.keys[0x6]=1;
+    if(Input.keys.a) Chip8.keys[0x5]=1;
+    if(Input.keys.b) Chip8.keys[0x0]=1;
+    if(Input.keys.start) Chip8.keys[0xC]=1;
+    if(Input.keys.select) Chip8.keys[0xF]=1;
+  }
+  function chip8Cycle(){
+    const op = (Chip8.mem[Chip8.pc]<<8) | Chip8.mem[Chip8.pc+1];
+    Chip8.pc = (Chip8.pc + 2) & 0xFFF;
+    const nnn = op & 0x0FFF, kk  = op & 0x00FF;
+    const x=(op>>8)&0x0F, y=(op>>4)&0x0F, n=op&0x000F;
+
+    switch(op & 0xF000){
+      case 0x0000:
+        if(op===0x00E0){ Chip8.gfx.fill(0); }
+        else if(op===0x00EE){ Chip8.sp=(Chip8.sp-1)&0xF; Chip8.pc=Chip8.stack[Chip8.sp]; }
+        break;
+      case 0x1000: Chip8.pc=nnn; break;
+      case 0x2000: Chip8.stack[Chip8.sp]=Chip8.pc; Chip8.sp=(Chip8.sp+1)&0xF; Chip8.pc=nnn; break;
+      case 0x3000: if(Chip8.V[x]===kk) Chip8.pc=(Chip8.pc+2)&0xFFF; break;
+      case 0x4000: if(Chip8.V[x]!==kk) Chip8.pc=(Chip8.pc+2)&0xFFF; break;
+      case 0x5000: if(n===0 && Chip8.V[x]===Chip8.V[y]) Chip8.pc=(Chip8.pc+2)&0xFFF; break;
+      case 0x6000: Chip8.V[x]=kk; break;
+      case 0x7000: Chip8.V[x]=(Chip8.V[x]+kk)&0xFF; break;
+      case 0x8000:
+        switch(n){
+          case 0x0: Chip8.V[x]=Chip8.V[y]; break;
+          case 0x1: Chip8.V[x]=(Chip8.V[x]|Chip8.V[y])&0xFF; break;
+          case 0x2: Chip8.V[x]=(Chip8.V[x]&Chip8.V[y])&0xFF; break;
+          case 0x3: Chip8.V[x]=(Chip8.V[x]^Chip8.V[y])&0xFF; break;
+          case 0x4: { const s=Chip8.V[x]+Chip8.V[y]; Chip8.V[0xF]=s>255?1:0; Chip8.V[x]=s&0xFF; } break;
+          case 0x5: { Chip8.V[0xF]=Chip8.V[x]>=Chip8.V[y]?1:0; Chip8.V[x]=(Chip8.V[x]-Chip8.V[y])&0xFF; } break;
+          case 0x6: { const val=Chip8.quirks.shiftLegacy?Chip8.V[y]:Chip8.V[x]; Chip8.V[0xF]=val&1; Chip8.V[x]=(val>>1)&0xFF; } break;
+          case 0x7: { Chip8.V[0xF]=Chip8.V[y]>=Chip8.V[x]?1:0; Chip8.V[x]=(Chip8.V[y]-Chip8.V[x])&0xFF; } break;
+          case 0xE: { const val=Chip8.quirks.shiftLegacy?Chip8.V[y]:Chip8.V[x]; Chip8.V[0xF]=(val>>7)&1; Chip8.V[x]=(val<<1)&0xFF; } break;
+        } break;
+      case 0x9000: if(n===0 && Chip8.V[x]!==Chip8.V[y]) Chip8.pc=(Chip8.pc+2)&0xFFF; break;
+      case 0xA000: Chip8.I=nnn; break;
+      case 0xB000: Chip8.pc=(nnn + Chip8.V[0])&0xFFF; break;
+      case 0xC000: Chip8.V[x]=(Math.floor(Math.random()*256)&kk)&0xFF; break;
+      case 0xD000: {
+        const vx=Chip8.V[x], vy=Chip8.V[y];
+        Chip8.V[0xF]=0;
+        for(let row=0; row<n; row++){
+          const sprite=Chip8.mem[(Chip8.I+row)&0xFFF];
+          for(let col=0; col<8; col++){
+            if((sprite & (0x80>>col))===0) continue;
+            const pxX=(vx+col)&63, pxY=(vy+row)&31, pi=pxY*64+pxX;
+            if(Chip8.gfx[pi]===1) Chip8.V[0xF]=1;
+            Chip8.gfx[pi]^=1;
+          }
+        }
+      } break;
+      case 0xE000:
+        if(kk===0x9E){ if(Chip8.keys[Chip8.V[x]&0xF]) Chip8.pc=(Chip8.pc+2)&0xFFF; }
+        else if(kk===0xA1){ if(!Chip8.keys[Chip8.V[x]&0xF]) Chip8.pc=(Chip8.pc+2)&0xFFF; }
+        break;
+      case 0xF000:
+        switch(kk){
+          case 0x07: Chip8.V[x]=Chip8.dt; break;
+          case 0x0A: {
+            let pressed=-1;
+            for(let i=0;i<16;i++){ if(Chip8.keys[i]){ pressed=i; break; } }
+            if(pressed<0) Chip8.pc=(Chip8.pc-2)&0xFFF;
+            else Chip8.V[x]=pressed;
+          } break;
+          case 0x15: Chip8.dt=Chip8.V[x]; break;
+          case 0x18: Chip8.st=Chip8.V[x]; break;
+          case 0x1E: Chip8.I=(Chip8.I+Chip8.V[x])&0xFFF; break;
+          case 0x29: Chip8.I=0x50 + (Chip8.V[x]&0xF)*5; break;
+          case 0x33: {
+            const v=Chip8.V[x];
+            Chip8.mem[Chip8.I]=Math.floor(v/100);
+            Chip8.mem[(Chip8.I+1)&0xFFF]=Math.floor((v%100)/10);
+            Chip8.mem[(Chip8.I+2)&0xFFF]=(v%10);
+          } break;
+          case 0x55: {
+            for(let i=0;i<=x;i++) Chip8.mem[(Chip8.I+i)&0xFFF]=Chip8.V[i];
+            if(Chip8.quirks.loadStoreIncrement) Chip8.I=(Chip8.I+x+1)&0xFFF;
+          } break;
+          case 0x65: {
+            for(let i=0;i<=x;i++) Chip8.V[i]=Chip8.mem[(Chip8.I+i)&0xFFF];
+            if(Chip8.quirks.loadStoreIncrement) Chip8.I=(Chip8.I+x+1)&0xFFF;
+          } break;
+        } break;
+    }
+  }
+  let chip8TimerAcc=0;
+  function chip8Step(dt){
+    chip8KeyMap();
+    if(!Chip8.running) return;
+    const base=Chip8.cyclesPerFrame;
+    const boost=1+1.7*PPU.coherence;
+    const jitter=1+0.25*(PPU.entropy)*(Math.random()*2-1);
+    const cycles=Math.max(4, Math.floor(base*boost*jitter));
+    for(let i=0;i<cycles;i++) chip8Cycle();
+    chip8TimerAcc+=dt;
+    while(chip8TimerAcc>=1/60){
+      if(Chip8.dt>0) Chip8.dt--;
+      if(Chip8.st>0) Chip8.st--;
+      chip8TimerAcc-=1/60;
+    }
+  }
+  const emuCanvas=document.createElement("canvas");
+  emuCanvas.width=64; emuCanvas.height=32;
+  const emuCtx=emuCanvas.getContext("2d",{alpha:true});
+  const emuImg=emuCtx.createImageData(64,32);
+  function renderChip8Overlay(){
+    const d=emuImg.data;
+    for(let i=0;i<64*32;i++){
+      const on=Chip8.gfx[i];
+      const p=i*4;
+      d[p]=255; d[p+1]=255; d[p+2]=255; d[p+3]=on?255:0;
+    }
+    emuCtx.putImageData(emuImg,0,0);
+    const padTop=108;
+    const availH=H-TabBar.h-padTop-12;
+    const maxW=W*0.86, maxH=availH*0.62;
+    const s=Math.floor(Math.min(maxW/64, maxH/32));
+    const dw=64*s, dh=32*s;
+    const x0=(W-dw)/2, y0=padTop+14;
+    ctx.save();
+    ctx.imageSmoothingEnabled=false;
+    ctx.globalAlpha=0.92;
+    ctx.drawImage(emuCanvas,x0,y0,dw,dh);
+    ctx.globalAlpha=1;
+    ctx.strokeStyle="rgba(255,255,255,0.22)";
+    ctx.lineWidth=2;
+    roundRect(ctx,x0-6,y0-6,dw+12,dh+12,14,false,true);
+    ctx.restore();
+  }
+
+  function U8(...arr){ return new Uint8Array(arr.map(x=>x&0xFF)); }
+  const ROM_SPARK = U8(
+    0x00,0xE0, 0xA2,0x20, 0xC0,0x3F, 0xC1,0x1F, 0xD0,0x15, 0x12,0x04,
+    ...new Array((0x220-0x20C)).fill(0x00),
+    0x3C,0x42,0xA5,0x81,0x7E
+  );
+  const ROM_MOVE = U8(
+    0x00,0xE0, 0x60,0x20, 0x61,0x10, 0x63,0x01, 0xA2,0x40,
+    0x00,0xE0,
+    0x62,0x04, 0xE2,0xA1, 0x80,0x35,
+    0x62,0x06, 0xE2,0xA1, 0x80,0x34,
+    0x62,0x08, 0xE2,0xA1, 0x81,0x35,
+    0x62,0x02, 0xE2,0xA1, 0x81,0x34,
+    0xD0,0x15, 0x12,0x0A,
+    ...new Array((0x240-0x21E)).fill(0x00),
+    0x18,0x3C,0x7E,0x3C,0x18
+  );
+  const ROM_DIGITS = U8(
+    0x00,0xE0, 0x60,0x1C, 0x61,0x10, 0x62,0x00,
+    0x00,0xE0, 0xF2,0x29, 0xD0,0x15, 0x72,0x01, 0x42,0x10, 0x62,0x00, 0x12,0x08
+  );
+
+  // =========================
+  // Games (same as prior file but trimmed: keep snake + chip8 demos)
+  // =========================
+  function pokeCell(x,y,vA,vB,vC){
+    if(x<1||x>=GW-1||y<1||y>=GH-1) return;
+    const i=idx(x,y);
+    A[i]=clamp(A[i]+vA,0,1);
+    B[i]=clamp(B[i]+vB,0,1);
+    C[i]=clamp(C[i]+vC,0,1);
+  }
+  function drawRectOnGrid(x0,y0,w,h,amp){
+    for(let y=y0;y<y0+h;y++){
+      for(let x=x0;x<x0+w;x++){
+        pokeCell(x,y,0.22*amp,0.14*amp,0.10*amp);
+      }
+    }
+  }
+
+    function dampAll(f){
+      for(let i=0;i<A.length;i++){
+        A[i]*=f; B[i]*=f; C[i]*=f;
+      }
+    }
+    function dampRect(x0,y0,w,h,f){
+      x0=Math.max(1,x0|0); y0=Math.max(1,y0|0);
+      const x1=Math.min(GW-2,(x0+w)|0), y1=Math.min(GH-2,(y0+h)|0);
+      for(let y=y0;y<y1;y++){
+        let base=y*GW+x0;
+        for(let x=x0;x<x1;x++,base++){
+          A[base]*=f; B[base]*=f; C[base]*=f;
+        }
+      }
+    }
+
+  const Games = {};
+  Games.snake = {
+    id:"snake", title:"Snake",
+    reset(){
+      const cx=Math.floor(GW*0.5), cy=Math.floor(GH*0.45);
+      this.dir={x:1,y:0};
+      this.sn=[{x:cx,y:cy},{x:cx-1,y:cy},{x:cx-2,y:cy}];
+      this.food={x:Math.floor(GW*0.3),y:Math.floor(GH*0.35)};
+      this.t=0; this.alive=true; this.score=0;
+    },
+    step(dt,input){
+      if(!this.alive){ if(input.start) this.reset(); return; }
+      if(input.up && this.dir.y!==1){ this.dir={x:0,y:-1}; }
+      if(input.down && this.dir.y!==-1){ this.dir={x:0,y:1}; }
+      if(input.left && this.dir.x!==1){ this.dir={x:-1,y:0}; }
+      if(input.right && this.dir.x!==-1){ this.dir={x:1,y:0}; }
+      const speed=10+8*(PPU.coherence);
+      this.t += dt*speed;
+      if(this.t<1) return;
+      this.t=0;
+      const head=this.sn[0];
+      const nx=head.x+this.dir.x, ny=head.y+this.dir.y;
+      if(nx<2||nx>=GW-2||ny<2||ny>=GH-2){ this.alive=false; return; }
+      for(const s of this.sn){ if(s.x===nx && s.y===ny){ this.alive=false; return; } }
+      this.sn.unshift({x:nx,y:ny});
+      if(nx===this.food.x && ny===this.food.y){
+        this.score++;
+        splash((nx/GW)*W,(ny/GH)*H,28,1.0);
+        let fx,fy,ok=false,guard=0;
+        while(!ok && guard++<500){
+          fx=2+Math.floor(Math.random()*(GW-4));
+          fy=2+Math.floor(Math.random()*(GH-4));
+          ok=true;
+          for(const s of this.sn){ if(s.x===fx && s.y===fy){ ok=false; break; } }
+        }
+        this.food={x:fx,y:fy};
+        PPU.coherence=clamp(PPU.coherence+0.02,0,1);
+      } else this.sn.pop();
+    },
+    render(){
+      drawRectOnGrid(this.food.x-1,this.food.y-1,3,3,1.0);
+      for(let i=0;i<this.sn.length;i++){
+        const s=this.sn[i];
+        const amp = 0.85 - 0.55*(i/Math.max(1,this.sn.length));
+        drawRectOnGrid(s.x,s.y,2,2,amp);
+      }
+    }
+  };
+
+  Games.chip8_spark = { id:"chip8_spark", title:"CHIP-8 • Spark (CC0 demo)", reset(){ chip8LoadROM(ROM_SPARK,"Spark (CC0)"); }, step(dt){ chip8Step(dt); }, render(){} };
+  Games.chip8_move  = { id:"chip8_move",  title:"CHIP-8 • Move Dot (CC0 demo)", reset(){ chip8LoadROM(ROM_MOVE,"Move Dot (CC0)"); }, step(dt){ chip8Step(dt); }, render(){} };
+  Games.chip8_digits= { id:"chip8_digits",title:"CHIP-8 • Digits (CC0 demo)", reset(){ chip8LoadROM(ROM_DIGITS,"Digits (CC0)"); }, step(dt){ chip8Step(dt); }, render(){} };
+
+  let USER_ROM=null;
+  Games.chip8_user = { id:"chip8_user", title:"CHIP-8 • User ROM", reset(){ if(!USER_ROM){ chip8Reset(); Chip8.running=false; Chip8.romName="(no user rom)"; return; } chip8LoadROM(USER_ROM.bytes, USER_ROM.name); }, step(dt){ chip8Step(dt); }, render(){} };
+
+    // =========================
+    // 3D demos (procedural, libre)
+    // =========================
+  
+    // Simple raycaster "RayMaze 3D" (procedural map, no assets)
+    Games.raymaze3d = {
+      id:"raymaze3d", title:"RayMaze 3D",
+      reset(){
+        this.mapW=16; this.mapH=16;
+        const rows=[
+          "1111111111111111",
+          "1000000000000001",
+          "1011110111110101",
+          "1010000100000101",
+          "1010111101110101",
+          "1010100001010101",
+          "1010101111010101",
+          "1000101000010001",
+          "1110101011110111",
+          "1000101000000001",
+          "1011101110111101",
+          "1010000010000101",
+          "1010111110110101",
+          "1010000000010101",
+          "1000000000000001",
+          "1111111111111111",
+        ];
+        this.map = rows.join("");
+        this.px=3.5; this.py=3.5;
+        this.ang=0.0;
+        this.fov=Math.PI/3;
+        this.speed=2.6;
+        this.turn=2.4;
+        this.stepX = (GW>320)?2:1;
+        this.msgT=0;
+      },
+      cell(x,y){
+        if(x<0||y<0||x>=this.mapW||y>=this.mapH) return 1;
+        return this.map[y*this.mapW+x]==="1"?1:0;
+      },
+      step(dt, k){
+        // rotate
+        if(k.left)  this.ang -= this.turn*dt;
+        if(k.right) this.ang += this.turn*dt;
+  
+        const dx=Math.cos(this.ang), dy=Math.sin(this.ang);
+        let mx=0,my=0;
+        if(k.up){ mx += dx; my += dy; }
+        if(k.down){ mx -= dx; my -= dy; }
+        // strafe on A/B
+        if(k.a){ mx += -dy; my += dx; }
+        if(k.b){ mx += dy; my += -dx; }
+  
+        const len=Math.hypot(mx,my);
+        if(len>0){
+          mx/=len; my/=len;
+          const nx=this.px + mx*this.speed*dt;
+          const ny=this.py + my*this.speed*dt;
+          // simple collision (separate axes)
+          if(!this.cell(Math.floor(nx), Math.floor(this.py))) this.px=nx;
+          if(!this.cell(Math.floor(this.px), Math.floor(ny))) this.py=ny;
+        }
+  
+        this.msgT = Math.max(0, this.msgT - dt);
+        if(k.start){ // quick reset
+          this.reset();
+          this.msgT = 1.2;
+          k.start=false;
+        }
+      },
+      render(){
+        // damp field so the 3D view stays stable
+        dampAll(0.82);
+  
+        const halfH = (GH*0.5)|0;
+        const sky = 0.09 + 0.06*Math.sin(0.8*PPU.poles[0]);
+        // quick sky/ground wash (cheap)
+        for(let y=1;y<GH-1;y+=2){
+          const t = (y<halfH)? (1 - y/halfH) : ((y-halfH)/(GH-halfH));
+          const a = (y<halfH) ? (0.03 + 0.02*t) : (0.02);
+          const b = (y<halfH) ? (sky*(0.6+0.4*t)) : (0.04 + 0.18*t);
+          const c = (y<halfH) ? (0.04 + 0.10*t) : (0.03 + 0.10*t);
+          for(let x=1;x<GW-1;x+=6){
+            pokeCell(x,y,a,b,c);
+          }
+        }
+  
+        const px=this.px, py=this.py;
+        const dirX=Math.cos(this.ang), dirY=Math.sin(this.ang);
+        const planeX = -dirY*Math.tan(this.fov/2);
+        const planeY =  dirX*Math.tan(this.fov/2);
+  
+        const stepX = this.stepX;
+        for(let x=2;x<GW-2;x+=stepX){
+          const cameraX = 2*x/(GW-1)-1; // -1..1
+          const rayDirX = dirX + planeX*cameraX;
+          const rayDirY = dirY + planeY*cameraX;
+  
+          let mapX = Math.floor(px);
+          let mapY = Math.floor(py);
+  
+          const invX = (rayDirX===0)?1e30:1/rayDirX;
+          const invY = (rayDirY===0)?1e30:1/rayDirY;
+  
+          let deltaDistX = Math.abs(invX);
+          let deltaDistY = Math.abs(invY);
+  
+          let stepXX, stepYY;
+          let sideDistX, sideDistY;
+  
+          if(rayDirX<0){ stepXX=-1; sideDistX=(px-mapX)*deltaDistX; }
+          else { stepXX=1; sideDistX=(mapX+1.0-px)*deltaDistX; }
+  
+          if(rayDirY<0){ stepYY=-1; sideDistY=(py-mapY)*deltaDistY; }
+          else { stepYY=1; sideDistY=(mapY+1.0-py)*deltaDistY; }
+  
+          let hit=0, side=0, guard=0;
+          while(!hit && guard++<64){
+            if(sideDistX<sideDistY){ sideDistX+=deltaDistX; mapX+=stepXX; side=0; }
+            else { sideDistY+=deltaDistY; mapY+=stepYY; side=1; }
+            if(this.cell(mapX,mapY)) hit=1;
+          }
+  
+          let perpDist;
+          if(side===0) perpDist = (mapX - px + (1 - stepXX)/2) * invX;
+          else         perpDist = (mapY - py + (1 - stepYY)/2) * invY;
+  
+          perpDist = Math.max(0.05, Math.abs(perpDist));
+          const lineH = Math.min(GH-2, Math.floor(GH/(perpDist)));
+          const y0 = Math.max(1, (halfH - (lineH>>1))|0);
+          const y1 = Math.min(GH-2, (y0 + lineH)|0);
+  
+          let shade = 1/(1+0.25*perpDist*perpDist);
+          if(side===1) shade *= 0.78;
+          // modulate with PPU to match your aesthetic
+          const pulse = 0.65 + 0.35*Math.sin(0.9*PPU.poles[1] + 0.7*perpDist);
+          const amp = clamp(shade*pulse, 0, 1);
+  
+          for(let y=y0;y<y1;y++){
+            // slight vertical texture
+            const t = (y-y0)/Math.max(1,(y1-y0));
+            const tex = 0.7 + 0.3*Math.sin(12*t + 3*perpDist);
+            pokeCell(x,y, 0.55*amp*tex, 0.25*amp, 0.18*amp);
+            if(stepX>1 && x+1<GW-1) pokeCell(x+1,y, 0.55*amp*tex, 0.25*amp, 0.18*amp);
+          }
+        }
+  
+        // minimap (tiny, top-left)
+        const mx0=6, my0=6, scale=3;
+        for(let y=0;y<this.mapH;y++){
+          for(let x=0;x<this.mapW;x++){
+            const v=this.cell(x,y);
+            if(v) drawRectOnGrid(mx0+x*scale, my0+y*scale, 2,2,0.35);
+          }
+        }
+        drawRectOnGrid(mx0+Math.floor(this.px*scale), my0+Math.floor(this.py*scale), 2,2,0.95);
+  
+        if(this.msgT>0){
+          splash(W*0.5,H*0.4,45,0.85);
+        }
+      }
+    };
+  
+    // Starfield "SpaceRun 3D" (projection demo)
+    Games.spacerun3d = {
+      id:"spacerun3d", title:"SpaceRun 3D",
+      reset(){
+        this.N = 420;
+        this.stars = new Array(this.N);
+        for(let i=0;i<this.N;i++) this.stars[i]=this.spawn();
+        this.speed = 4.8;
+        this.yaw=0; this.pitch=0;
+      },
+      spawn(){
+        return {x:(Math.random()*2-1)*1.2, y:(Math.random()*2-1)*1.2, z:Math.random()*1+0.05};
+      },
+      step(dt,k){
+        if(k.left) this.yaw-=1.6*dt;
+        if(k.right) this.yaw+=1.6*dt;
+        if(k.up) this.pitch-=1.2*dt;
+        if(k.down) this.pitch+=1.2*dt;
+        const boost = (k.a||k.b)?1.8:1.0;
+        const v=this.speed*boost;
+        for(const s of this.stars){
+          s.z -= v*dt*0.25;
+          if(s.z<=0.02) Object.assign(s,this.spawn(),{z:1.0});
+        }
+        if(k.start){ this.reset(); k.start=false; }
+      },
+      render(){
+        dampAll(0.86);
+        const cy=Math.cos(this.yaw), sy=Math.sin(this.yaw);
+        const cp=Math.cos(this.pitch), sp=Math.sin(this.pitch);
+  
+        // horizon glow
+        for(let x=1;x<GW-1;x+=8){
+          for(let y=1;y<GH-1;y+=10){
+            const dy=(y/GH-0.5), dx=(x/GW-0.5);
+            const r=Math.sqrt(dx*dx+dy*dy);
+            const a=0.02;
+            const b=0.05 + 0.10*Math.max(0,0.55-r);
+            const c=0.04 + 0.06*Math.max(0,0.45-r);
+            pokeCell(x,y,a,b,c);
+          }
+        }
+  
+        for(const s of this.stars){
+          // rotate
+          let x=s.x, y=s.y, z=s.z;
+          // yaw
+          let x1 = x*cy - z*sy;
+          let z1 = x*sy + z*cy;
+          // pitch (around x axis)
+          let y2 = y*cp - z1*sp;
+          let z2 = y*sp + z1*cp;
+  
+          const inv = 1/Math.max(0.04, z2);
+          const sx = Math.floor((x1*inv*0.7 + 0.5)*GW);
+          const syy= Math.floor((y2*inv*0.7 + 0.5)*GH);
+          if(sx<2||sx>=GW-2||syy<2||syy>=GH-2) continue;
+  
+          const amp = clamp(0.25 + 0.9*(1-z2),0,1);
+          pokeCell(sx,syy, 0.65*amp, 0.35*amp, 0.25*amp);
+        }
+        // center reticle
+        drawRectOnGrid((GW/2)|0, (GH/2)|0, 2,2,0.55);
+      }
+    };
+
+  // Cartridge
+  const Cartridge = {
+    active:{ name:"Open Emu MegaCart", games:["snake","raymaze3d","spacerun3d","chip8_move","chip8_spark","chip8_digits"] },
+    list:[
+      {name:"Open Emu MegaCart", games:["snake","raymaze3d","spacerun3d","chip8_move","chip8_spark","chip8_digits"]},
+      {name:"3D Demo Pack", games:["raymaze3d","spacerun3d"]},
+      {name:"CHIP-8 Demos (CC0)", games:["chip8_move","chip8_spark","chip8_digits"]},
+      {name:"Snake Only", games:["snake"]},
+    ],
+    selectedGame:"raymaze3d",
+  };
+
+  function mountGame(id){
+    const g=Games[id];
+    if(!g){ logLine("game missing: " + id); return; }
+    ActiveGame = Object.create(g);
+    ActiveGame.reset();
+    running=true;
+    logLine("game: " + g.title);
+    splash(W*0.5,H*0.42,70,1.0);
+  }
+  function setCartridge(cart){
+    Cartridge.active={name:cart.name, games:[...cart.games]};
+    Cartridge.selectedGame=Cartridge.active.games[0]||"snake";
+    mountGame(Cartridge.selectedGame);
+    logLine("cartridge: "+Cartridge.active.name);
+  }
+  function nextGame(){
+    const list=Cartridge.active.games;
+    const i=list.indexOf(Cartridge.selectedGame);
+    const nxt=list[(i+1)%list.length];
+    Cartridge.selectedGame=nxt;
+    mountGame(nxt);
+  }
+
+  function cartridgeEquals(a,b){
+    if(!a||!b) return false;
+    if(a.name!==b.name) return false;
+    if(a.games.length!==b.games.length) return false;
+    for(let i=0;i<a.games.length;i++) if(a.games[i]!==b.games[i]) return false;
+    return true;
+  }
+
+  fileCart.addEventListener("change", async () => {
+    const f=fileCart.files && fileCart.files[0];
+    if(!f) return;
+    try{
+      const name=f.name||"file";
+      if(name.toLowerCase().endsWith(".json")){
+        const txt=await f.text();
+        const obj=JSON.parse(txt);
+        if(!obj || typeof obj.name!=="string" || !Array.isArray(obj.games)) throw new Error("bad cart");
+        const games=obj.games.map(x=>String(x)).filter(id=>Games[id]);
+        if(!games.length) throw new Error("no valid games");
+        const cart={name:obj.name.slice(0,64), games};
+        Cartridge.list.unshift(cart);
+        setCartridge(cart);
+        logLine("import: cart ok");
+      } else {
+        const buf=await f.arrayBuffer();
+        const bytes=new Uint8Array(buf);
+        if(bytes.length<8) throw new Error("too small");
+        USER_ROM={name:name.slice(0,80), bytes};
+        const cart={name:"User CHIP-8 Cart", games:["chip8_user","chip8_move","chip8_spark"]};
+        Cartridge.list.unshift(cart);
+        setCartridge(cart);
+        Cartridge.selectedGame="chip8_user";
+        mountGame("chip8_user");
+        logLine("import: chip8 rom ok");
+      }
+    } catch(e){
+      logLine("import failed: " + (e && e.message ? e.message : "error"));
+    } finally {
+      fileCart.value="";
+    }
+  });
+
+  // =========================
+  // Tabs + interactions
+  // =========================
+  let ActiveGame=null;
+  let running=false;
+  setCartridge(Cartridge.active);
+
+  function handleTap(x,y){
+    const T=tabLayout();
+    for(const t of T.tabs){
+      if(hit(t.r,x,y)){ UI.tab=t.name; logLine("tab: "+t.name); return true; }
+    }
+    if(UI.tab==="HOME"){
+      const bProfile=rect(12,62,170,36);
+      const bHelp=rect(190,62,110,36);
+      const bPause=rect(308,62,100,36);
+      if(hit(bProfile,x,y)){ cycleProfile(); return true; }
+      if(hit(bHelp,x,y)){ logLine("Tip: CARTS → import .ch8; CONSOLE → run/reset/next"); return true; }
+      if(hit(bPause,x,y)){ running=!running; logLine(running?"run: on":"run: off"); return true; }
+    }
+    if(UI.tab==="CONSOLE"){
+      const bRun=rect(12,62,110,36);
+      const bReset=rect(130,62,110,36);
+      const bNext=rect(248,62,160,36);
+      if(hit(bRun,x,y)){ running=!running; logLine(running?"run: on":"run: off"); return true; }
+      if(hit(bReset,x,y)){ if(ActiveGame) ActiveGame.reset(); splash(W*0.5,H*0.45,55,1.0); logLine("reset"); return true; }
+      if(hit(bNext,x,y)){ nextGame(); return true; }
+    }
+    if(UI.tab==="CARTS"){
+      const bImport=rect(12,62,120,36);
+      if(hit(bImport,x,y)){ fileCart.click(); return true; }
+      const listY=146, itemH=46;
+      for(let i=0;i<Math.min(7,Cartridge.list.length);i++){
+        const r=rect(12,listY+i*itemH, W-24, itemH-8);
+        if(hit(r,x,y)){ setCartridge(Cartridge.list[i]); return true; }
+      }
+    }
+    if(UI.tab==="PPU"){
+      const bPulse=rect(12,62,110,36);
+      const bBoost=rect(130,62,110,36);
+      const bCalm=rect(248,62,110,36);
+      const bSpeed=rect(366,62,42,36);
+      if(hit(bPulse,x,y)){
+        for(let i=0;i<PPU.poles.length;i++) PPU.poleVel[i]+=rand(-0.85,0.85);
+        splash(W*0.5,H*0.4,70,1.0);
+        logLine("ppu: pulse"); return true;
+      }
+      if(hit(bBoost,x,y)){ PPU.coherence=clamp(PPU.coherence+0.08,0,1); logLine("ppu: boost"); return true; }
+      if(hit(bCalm,x,y)){ PPU.coherence=clamp(PPU.coherence-0.08,0,1); logLine("ppu: calm"); return true; }
+      if(hit(bSpeed,x,y)){
+        Chip8.cyclesPerFrame = clamp(Chip8.cyclesPerFrame + 2, 6, 30);
+        if(Chip8.cyclesPerFrame>=30) Chip8.cyclesPerFrame=8;
+        logLine("chip8 speed: " + Chip8.cyclesPerFrame);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  canvas.addEventListener("pointerdown", (e)=>{
+    const x=e.clientX, y=e.clientY;
+    const zone=classifyZone(x,y);
+    if(zone==="none") handleTap(x,y);
+    if(zone!=="none"){
+      Input.pointers.set(e.pointerId,{x,y,zone});
+      updateKeysFromPointers();
+      splash(x,y,20,0.9);
+      PPU.coherence=clamp(PPU.coherence+0.01,0,1);
+      e.preventDefault();
+    }
+  }, {passive:false});
+  canvas.addEventListener("pointermove",(e)=>{
+    if(!Input.pointers.has(e.pointerId)) return;
+    const x=e.clientX, y=e.clientY;
+    Input.pointers.set(e.pointerId,{x,y,zone:classifyZone(x,y)});
+    updateKeysFromPointers();
+  }, {passive:true});
+  function endPointer(e){ Input.pointers.delete(e.pointerId); updateKeysFromPointers(); }
+  canvas.addEventListener("pointerup",(e)=>endPointer(e),{passive:true});
+  canvas.addEventListener("pointercancel",(e)=>endPointer(e),{passive:true});
+
+  // =========================
+  // Rendering
+  // =========================
+  function renderControls(){
+    const L=ctrlLayout();
+    ctx.save();
+    ctx.globalAlpha=0.85;
+    ctx.fillStyle="rgba(0,0,0,0.30)";
+    ctx.strokeStyle="rgba(255,255,255,0.14)";
+    roundRect(ctx,L.dpad.x,L.dpad.y,L.dpad.w,L.dpad.h,16,true,true);
+    roundRect(ctx,L.btns.x,L.btns.y,L.btns.w,L.btns.h,16,true,true);
+
+    const cx=L.dpad.x+L.dpad.w/2, cy=L.dpad.y+L.dpad.h/2;
+    const arm=L.dpad.w*0.18;
+    function drawDir(dx,dy,pressed,label){
+      ctx.save();
+      ctx.fillStyle = pressed ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.07)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx, cx+dx*arm-26, cy+dy*arm-18, 52, 36, 12, true, true);
+      ctx.fillStyle="rgba(255,255,255,0.90)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="middle";
+      ctx.fillText(label, cx+dx*arm-10, cy+dy*arm);
+      ctx.restore();
+    }
+    drawDir(0,-1,Input.keys.up,"UP");
+    drawDir(0,1,Input.keys.down,"DN");
+    drawDir(-1,0,Input.keys.left,"LT");
+    drawDir(1,0,Input.keys.right,"RT");
+
+    const bx=L.btns.x+L.btns.w/2, by=L.btns.y+L.btns.h/2;
+    let aLabel="A", bLabel="B";
+    if(Input.profile==="Nintendo"){ aLabel="B"; bLabel="A"; }
+    if(Input.profile==="Sega"){ aLabel="1"; bLabel="2"; }
+
+    function drawBtn(dx,dy,pressed,label){
+      ctx.save();
+      ctx.fillStyle = pressed ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      ctx.beginPath();
+      ctx.arc(bx+dx*L.btns.w*0.22, by+dy*L.btns.h*0.22, L.btns.w*0.13, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle="rgba(255,255,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="middle";
+      ctx.fillText(label, bx+dx*L.btns.w*0.22-6, by+dy*L.btns.h*0.22+1);
+      ctx.restore();
+    }
+    drawBtn(1,0,Input.keys.a,aLabel);
+    drawBtn(0,1,Input.keys.b,bLabel);
+
+    button(L.select.x,L.select.y,L.select.w,L.select.h,"SEL",Input.keys.select,true);
+    button(L.start.x,L.start.y,L.start.w,L.start.h,"START",Input.keys.start,false);
+    ctx.restore();
+  }
+
+  function renderTopBars(){
+    ctx.save();
+    ctx.fillStyle="rgba(0,0,0,0.34)";
+    ctx.fillRect(0,0,W,54);
+    ctx.fillStyle="rgba(0,0,0,0.30)";
+    ctx.fillRect(0,H-TabBar.h,W,TabBar.h);
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle="rgba(255,255,255,0.94)";
+    ctx.font="16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="middle";
+    ctx.fillText("Calculator Atom • Open Emu (Fixed Boot)", 12, 18);
+    ctx.fillStyle="rgba(210,220,255,0.88)";
+    ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText("If you see a black screen, this build shows errors on-screen.", 12, 38);
+    ctx.restore();
+
+    const T=tabLayout();
+    for(const t of T.tabs){
+      ctx.save();
+      const active=(UI.tab===t.name);
+      ctx.fillStyle=active? "rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)";
+      ctx.strokeStyle=active? "rgba(255,255,255,0.25)":"rgba(255,255,255,0.12)";
+      ctx.lineWidth=1;
+      roundRect(ctx,t.r.x+2,t.r.y+6,t.r.w-4,t.r.h-12,10,true,true);
+      ctx.fillStyle=active? "rgba(255,255,255,0.95)":"rgba(200,210,255,0.74)";
+      ctx.font="13px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="middle";
+      ctx.fillText(t.name, t.r.x+12, t.r.y+22);
+      ctx.restore();
+    }
+
+    if(UI.tab==="HOME"){
+      button(12,62,170,36,"PROFILE: "+Input.profile,false,true);
+      button(190,62,110,36,"HELP",false,false);
+      button(308,62,100,36, running?"PAUSE":"RUN", !running, true);
+    }
+    if(UI.tab==="CONSOLE"){
+      button(12,62,110,36, running?"PAUSE":"RUN", !running, false);
+      button(130,62,110,36,"RESET",false,false);
+      button(248,62,160,36,"NEXT GAME",false,false);
+    }
+    if(UI.tab==="CARTS"){
+      button(12,62,120,36,"IMPORT",false,false);
+      button(140,62,268,36,"Tap a cart below",false,true);
+    }
+    if(UI.tab==="PPU"){
+      button(12,62,110,36,"PULSE",false,false);
+      button(130,62,110,36,"BOOST",false,false);
+      button(248,62,110,36,"CALM",false,false);
+      button(366,62,42,36,"SPD",false,true);
+    }
+  }
+
+  function renderPanels(){
+    if(UI.tab==="HOME"){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.22)";
+      ctx.strokeStyle="rgba(255,255,255,0.12)";
+      roundRect(ctx,12,108,W-24,120,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Cartridge: "+Cartridge.active.name, 22, 118);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.fillText("Game: "+(ActiveGame?ActiveGame.title:"(none)")+"  |  Running: "+(running?"yes":"no"), 22, 140);
+      ctx.fillText("CARTS: import .ch8 (legal) or .json cart. CONSOLE: run/reset/next.", 22, 162);
+      ctx.restore();
+    }
+    if(UI.tab==="CONSOLE"){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.22)";
+      ctx.strokeStyle="rgba(255,255,255,0.12)";
+      roundRect(ctx,12,108,W-24,140,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Cart: "+Cartridge.active.name, 22, 118);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.fillText("Game: "+(ActiveGame?ActiveGame.title:"(none)"), 22, 140);
+      if(Cartridge.selectedGame.startsWith("chip8")){
+        ctx.fillText("CHIP-8 ROM: "+Chip8.romName+"  | speed="+Chip8.cyclesPerFrame, 22, 162);
+      } else ctx.fillText("Touch D-pad + A/B + START to play.", 22, 162);
+      ctx.restore();
+    }
+    if(UI.tab==="CARTS"){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.22)";
+      ctx.strokeStyle="rgba(255,255,255,0.12)";
+      roundRect(ctx,12,108,W-24,330,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Cartridges (tap one). Import .ch8 or .json.", 22, 118);
+
+      const listY=146, itemH=46;
+      for(let i=0;i<Math.min(7,Cartridge.list.length);i++){
+        const cart=Cartridge.list[i];
+        const r=rect(12,listY+i*itemH, W-24, itemH-8);
+        ctx.fillStyle = cartridgeEquals(cart,Cartridge.active) ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)";
+        ctx.strokeStyle="rgba(255,255,255,0.10)";
+        roundRect(ctx,r.x+2,r.y+2,r.w-4,r.h-4,12,true,true);
+        ctx.fillStyle="rgba(245,245,255,0.92)";
+        ctx.fillText(cart.name, r.x+14, r.y+10);
+        ctx.fillStyle="rgba(210,220,255,0.80)";
+        ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText(cart.games.join(", "), r.x+14, r.y+28);
+        ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      }
+      ctx.restore();
+    }
+    if(UI.tab==="PPU"){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.22)";
+      ctx.strokeStyle="rgba(255,255,255,0.12)";
+      roundRect(ctx,12,108,W-24,170,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("coherence="+PPU.coherence.toFixed(2)+"  entropy="+PPU.entropy.toFixed(2)+"  temp="+PPU.temperature.toFixed(2), 22, 118);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.fillText("Pulse/Boost/Calm affect texture + emu cycles. SPD changes CHIP-8 base speed.", 22, 140);
+      ctx.restore();
+    }
+  }
+
+  function renderLogOrError(){
+    if(fatalError){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.82)";
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,120,120,0.95)";
+      ctx.font="14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+      ctx.textBaseline="top";
+      const msg = "FATAL JS ERROR:\n\n" + fatalError;
+      const lines = msg.split(/\n/).slice(0,28);
+      let y=20;
+      for(const line of lines){
+        ctx.fillText(line.slice(0,120), 14, y);
+        y+=18;
+      }
+      ctx.fillStyle="rgba(210,220,255,0.9)";
+      ctx.fillText("\nIf this happened on Android WebView, try opening in Chrome directly.", 14, y+8);
+      ctx.restore();
+      return;
+    }
+
+    // log panel
+    ctx.save();
+    ctx.fillStyle="rgba(0,0,0,0.24)";
+    ctx.strokeStyle="rgba(255,255,255,0.12)";
+    const logY = Math.min(H-TabBar.h-8, 340);
+    const hh = Math.max(92, H-logY-TabBar.h-10);
+    roundRect(ctx,12,logY,W-24,hh,12,true,true);
+    ctx.fillStyle="rgba(200,210,255,0.82)";
+    ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="top";
+    ctx.fillText("Log:", 22, logY+10);
+    let yy=logY+28;
+    for(const line of UI.log.slice(-11)){
+      ctx.fillStyle="rgba(235,235,255,0.88)";
+      ctx.fillText(line, 22, yy);
+      yy += 16;
+    }
+    ctx.restore();
+  }
+
+  function fieldStep(dt){
+    if(!A) return;
+    ppuStep(dt);
+    const feed = 0.035 + 0.020*(1-PPU.coherence);
+    const kill = 0.055 + 0.020*(PPU.entropy);
+    const da=1.0, db=0.56, dc=0.34;
+
+    for(let y=1;y<GH-1;y++){
+      for(let x=1;x<GW-1;x++){
+        const i=idx(x,y);
+        const a=A[i], b=B[i], c=C[i];
+        const la=lap(A,x,y), lb=lap(B,x,y), lc=lap(C,x,y);
+        const ab2=a*b*b;
+
+        let na=a+(da*la-ab2+feed*(1-a))*dt;
+        let nb=b+(db*lb+ab2-(kill+feed)*b)*dt;
+        let nc=c+(dc*lc+0.10*ab2-0.06*c)*dt;
+
+        const s=PPU.smooth;
+        A2[i]=clamp((1-s)*na+s*a,0,1);
+        B2[i]=clamp((1-s)*nb+s*b,0,1);
+        C2[i]=clamp((1-s)*nc+s*c,0,1);
+      }
+    }
+    [A,A2]=[A2,A]; [B,B2]=[B2,B]; [C,C2]=[C2,C];
+  }
+
+  function gameStep(dt){
+    if(!ActiveGame || !running) return;
+    if(Input.keys.select){ cycleProfile(); Input.keys.select=false; }
+    ActiveGame.step(dt, Input.keys);
+    ActiveGame.render();
+  }
+
+  function renderField(){
+    if(!A){ 
+      ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="rgba(255,255,255,0.9)";
+      ctx.font="16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText("Booting…", 14, 28);
+      return;
+    }
+    for(let i=0;i<A.length;i++){
+      const a=A[i], b=B[i], c=C[i];
+      const hue=0.5+0.35*Math.sin(0.9*PPU.poles[0]+0.4*PPU.poles[3]);
+      const r=clamp(255*(0.10+0.90*a),0,255);
+      const g=clamp(255*(0.08+0.85*(hue*b+(1-hue)*c)),0,255);
+      const bb=clamp(255*(0.06+0.90*(0.6*c+0.4*b)),0,255);
+      const p=i*4;
+      px[p]=r|0; px[p+1]=g|0; px[p+2]=bb|0; px[p+3]=255;
+    }
+    offCtx.putImageData(img,0,0);
+
+    ctx.clearRect(0,0,W,H);
+    const dw=GW*scale, dh=GH*scale;
+    const x0=(W-dw)/2, y0=(H-dh)/2;
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(off,x0,y0,dw,dh);
+
+    // vignette
+    ctx.save();
+    const grd=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.15, W/2,H/2, Math.max(W,H)*0.65);
+    grd.addColorStop(0,"rgba(0,0,0,0)");
+    grd.addColorStop(1,"rgba(0,0,0,0.45)");
+    ctx.fillStyle=grd;
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+
+    if(Cartridge.selectedGame.startsWith("chip8")) renderChip8Overlay();
+  }
+
+  // =========================
+  // Loop
+  // =========================
+  let lastT=now(), fpsT=now(), frames=0;
+  function loop(){
+    const t=now();
+    let dt=(t-lastT)/1000;
+    lastT=t;
+    dt=clamp(dt,0.001,0.030);
+
+    const steps=(dt>0.020)?2:1;
+    for(let s=0;s<steps;s++){
+      fieldStep(dt/steps);
+      gameStep(dt/steps);
+    }
+
+    renderField();
+    renderTopBars();
+    renderPanels();
+    renderControls();
+    renderLogOrError();
+
+    frames++;
+    if(t-fpsT>500){
+      UI.fps = frames*1000/(t-fpsT);
+      UI.frameMs = (t-fpsT)/frames;
+      frames=0; fpsT=t;
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // Boot sequence: resize FIRST, then grid init, then start loop.
+  resize();
+  logLine("boot: ok");
+  logLine("tap CONSOLE → RUN (or HOME → RUN)");
+  logLine("CARTS → IMPORT: .ch8 ROM or .json cart");
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
