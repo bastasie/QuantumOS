@@ -1,0 +1,1528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>AQAI • GIFLife Screen • Math Stream Train + Image Stream Train • PPU+AQC</title>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;height:100%;}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none;}
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+
+<script>
+(() => {
+  "use strict";
+
+  // =========================
+  // Canvas
+  // =========================
+  const canvas = document.getElementById("screen");
+  const ctx = canvas.getContext("2d", { alpha:false, desynchronized:true });
+
+  let W=0,H=0,DPR=1;
+  function resize(){
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio||1));
+    W = Math.floor(window.innerWidth);
+    H = Math.floor(window.innerHeight);
+    canvas.width = Math.floor(W*DPR);
+    canvas.height = Math.floor(H*DPR);
+    canvas.style.width = W+"px";
+    canvas.style.height = H+"px";
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener("resize", resize, {passive:true});
+  resize();
+
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const now=()=>performance.now();
+  const rand=(a=0,b=1)=>a+(b-a)*Math.random();
+
+  // =========================
+  // GIFLife field (reaction-diffusion-ish) == THE screen
+  // =========================
+  let GW=0,GH=0,scale=1;
+  let A,B,C,A2,B2,C2;
+  let off,offCtx,img,px;
+
+  function initGrid(){
+    const target = clamp(Math.floor(Math.min(W,H)*0.9), 190, 340);
+    GW = target;
+    GH = clamp(Math.floor(target*(H/W)), 190, 560);
+
+    A=new Float32Array(GW*GH);
+    B=new Float32Array(GW*GH);
+    C=new Float32Array(GW*GH);
+    A2=new Float32Array(GW*GH);
+    B2=new Float32Array(GW*GH);
+    C2=new Float32Array(GW*GH);
+
+    for(let i=0;i<A.length;i++){
+      A[i]=0.15+0.10*Math.random();
+      B[i]=0.10+0.10*Math.random();
+      C[i]=0.05+0.10*Math.random();
+    }
+
+    off=document.createElement("canvas");
+    off.width=GW; off.height=GH;
+    offCtx=off.getContext("2d",{alpha:false});
+    img=offCtx.createImageData(GW,GH);
+    px=img.data;
+
+    scale = Math.min(W/GW, H/GH);
+
+    // initial splashes
+    for(let k=0;k<14;k++) splash(Math.random()*W, Math.random()*H, 18+Math.random()*52, 1.0);
+  }
+  initGrid();
+
+  function idx(x,y){return y*GW+x;}
+  function lap(arr,x,y){
+    const i=idx(x,y), v=arr[i];
+    return (arr[i-1]+arr[i+1]+arr[i-GW]+arr[i+GW]-4*v);
+  }
+  function splash(xpx,ypx,rpx,str){
+    const gx=Math.floor((xpx/W)*GW);
+    const gy=Math.floor((ypx/H)*GH);
+    const rr=Math.max(2, Math.floor((rpx/Math.min(W,H))*Math.min(GW,GH)));
+    const r2=rr*rr;
+    for(let y=gy-rr;y<=gy+rr;y++){
+      if(y<1||y>=GH-1) continue;
+      for(let x=gx-rr;x<=gx+rr;x++){
+        if(x<1||x>=GW-1) continue;
+        const dx=x-gx, dy=y-gy;
+        if(dx*dx+dy*dy>r2) continue;
+        const i=idx(x,y);
+        const bump=str*(1-(dx*dx+dy*dy)/r2);
+        A[i]=clamp(A[i]+0.35*bump,0,1);
+        B[i]=clamp(B[i]+0.25*bump,0,1);
+        C[i]=clamp(C[i]+0.15*bump,0,1);
+      }
+    }
+  }
+
+  // =========================
+  // PPU + BAZ pole oscillator bank (controls dynamics + "coherence")
+  // =========================
+  const PPU={
+    coherence:0.82,
+    smooth:0.18,
+    temperature:0.85,
+    entropy:0.15,
+    poles:new Float32Array(12),
+    poleVel:new Float32Array(12),
+  };
+
+  function ppuStep(dt){
+    for(let i=0;i<PPU.poles.length;i++){
+      const w=1.6+0.15*i;
+      const damp=0.08+0.004*i;
+      const drive=0.12*Math.sin(0.001*now()*(1+i*0.07));
+      const k=0.9+0.8*(1-PPU.coherence);
+      const acc=-w*w*PPU.poles[i]-damp*PPU.poleVel[i]+drive-0.25*k*PPU.poles[i];
+      PPU.poleVel[i]+=acc*dt;
+      PPU.poles[i]+=PPU.poleVel[i]*dt;
+    }
+    let E=0;
+    for(let i=0;i<PPU.poles.length;i++) E+=PPU.poles[i]*PPU.poles[i]+0.2*PPU.poleVel[i]*PPU.poleVel[i];
+    PPU.entropy=clamp(E/PPU.poles.length,0,1);
+
+    const targetTemp=0.55+0.60*PPU.coherence;
+    PPU.temperature=clamp(PPU.temperature+(targetTemp-PPU.temperature)*0.04,0.2,1.4);
+    const targetSmooth=0.10+0.55*(1-PPU.coherence);
+    PPU.smooth=clamp(PPU.smooth+(targetSmooth-PPU.smooth)*0.04,0.05,0.85);
+  }
+
+  // =========================
+  // Corpus + "semantic" generator (coherent outputs without heavy models)
+  // =========================
+  const Corpus={docs:[],maxDocs:520,totalChars:0};
+
+  const SEED=[
+    "Noether's theorem: every differentiable symmetry of the action corresponds to a conserved current. Time translation symmetry implies energy conservation.",
+    "Euler–Lagrange equation: for S[q]=∫L(q,q̇,t)dt, stationarity δS=0 yields d/dt(∂L/∂q̇)−∂L/∂q=0. This converts variational principles into differential equations.",
+    "Spectral theorem: any real symmetric matrix is diagonalizable by an orthonormal basis with real eigenvalues. This decomposes dynamics into modes.",
+    "Incompressible Navier–Stokes: ∂_t u+(u·∇)u=−∇p+νΔu+f with ∇·u=0. Pressure enforces divergence free constraint; viscosity smooths via diffusion.",
+    "Close reading tracks diction, syntax, metaphor, and narrative viewpoint; argument structure and cadence determine emphasis and inference."
+  ];
+
+  function ingestText(text){
+    if(!text) return;
+    const parts = String(text).replace(/\r/g,"")
+      .split(/\n\s*\n/g)
+      .map(s=>s.replace(/\s+/g," ").trim())
+      .filter(s=>s.length>=80 && s.length<=2200);
+
+    for(const p of parts){
+      Corpus.docs.push(p);
+      Corpus.totalChars+=p.length;
+      while(Corpus.docs.length>Corpus.maxDocs){
+        const r=Corpus.docs.shift();
+        if(r) Corpus.totalChars-=r.length;
+      }
+      while(Corpus.totalChars>3_200_000){
+        const r=Corpus.docs.shift();
+        if(r) Corpus.totalChars-=r.length;
+      }
+    }
+  }
+  for(const s of SEED) ingestText(s);
+
+  const STOP=new Set(("a an and are as at be by for from has have if in into is it its of on or that the to was were will with this these those your you we they i he she them our their there here what why how when where who which").split(/\s+/));
+  function qWords(q){
+    const s=(q||"").toLowerCase().replace(/[^a-z0-9\s\-]/g," ");
+    return s.split(/\s+/).map(w=>w.trim()).filter(w=>w && w.length>=3 && !STOP.has(w)).slice(0,28);
+  }
+  function relevance(prompt,text){
+    const w=qWords(prompt); if(!w.length) return 0;
+    const low=(text||"").toLowerCase();
+    let hits=0;
+    for(const t of w) if(low.indexOf(t)!==-1) hits++;
+    return clamp(hits/w.length,0,1);
+  }
+  function senseScore(text){
+    const t=(text||"").slice(0,2400);
+    if(!t) return 0;
+    const printable=t.replace(/\r/g,"").replace(/[^\x09\x0A\x0D\x20-\x7E]/g,"");
+    const pr=printable.length/Math.max(1,t.length);
+    const words=printable.split(/\s+/).filter(Boolean);
+    const avg=words.reduce((a,w)=>a+w.length,0)/Math.max(1,words.length);
+    const punct=(printable.match(/[,.;:?!]/g)||[]).length/Math.max(1,printable.length);
+    return clamp(0.55*pr+0.25*clamp(avg/6,0,1)+0.20*clamp(punct*18,0,1),0,1);
+  }
+  function retrieve(prompt,k=10){
+    const w=qWords(prompt);
+    if(!w.length) return Corpus.docs.slice(-k);
+    const scored=[];
+    for(const d of Corpus.docs){
+      const low=d.toLowerCase();
+      let sc=0;
+      for(const t of w) if(low.indexOf(t)!==-1) sc+=2;
+      if(sc>0) scored.push([sc,d]);
+    }
+    scored.sort((a,b)=>b[0]-a[0]);
+    return scored.slice(0,k).map(x=>x[1]);
+  }
+  function splitSent(p){
+    return (p||"").replace(/\s+/g," ").trim().split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(Boolean);
+  }
+  function compose(prompt,targetChars){
+    const hits=retrieve(prompt,12);
+    const w=qWords(prompt);
+    let scored=[];
+    for(const p of hits){
+      for(const s of splitSent(p)){
+        const low=s.toLowerCase();
+        let sc=0;
+        for(const t of w) if(low.indexOf(t)!==-1) sc+=2;
+        if(s.length>42) sc+=0.4;
+        if(s.includes(":")) sc+=0.2;
+        if(sc>0) scored.push({sc,s});
+      }
+    }
+    if(!scored.length){
+      const txt=hits.join("\n\n");
+      return (txt || "No matching cached context yet. Stream more math text first.").slice(0,targetChars);
+    }
+    scored.sort((a,b)=>b.sc-a.sc);
+    let out="Answer (semantic compose):\n\n";
+    const used=new Set();
+    for(const it of scored){
+      const key=it.s.toLowerCase().slice(0,80);
+      if(used.has(key)) continue;
+      used.add(key);
+      if(out.length<targetChars*0.58) out += "• "+it.s+"\n";
+      else out += "\n"+it.s;
+      if(out.length>=targetChars) break;
+    }
+    if(out.length<targetChars*0.85) out += "\n\nSummary: define objects, state invariants, derive consequences, check limiting cases.";
+    return out.slice(0,targetChars);
+  }
+  function generateBest(prompt,nChars,iters=4){
+    let best=null;
+    for(let i=1;i<=iters;i++){
+      const text=compose(prompt,nChars);
+      const coh=senseScore(text);
+      const rel=relevance(prompt,text);
+      const score=0.68*coh+0.32*rel;
+      const cand={text,coh,rel,score,i,iters};
+      if(!best||cand.score>best.score) best=cand;
+    }
+    PPU.coherence=clamp(0.86*PPU.coherence+0.14*best.coh,0,1);
+    return best;
+  }
+
+  // =========================
+  // "Cache in GIF strip" (visual byte burn)
+  // =========================
+  let cachePtr=0;
+  function burn(text){
+    if(!text) return;
+    const enc=new TextEncoder();
+    const bytes=enc.encode(String(text).slice(0,8192));
+    const stripH=Math.max(18, Math.floor(GH*0.06));
+    const y0=GH-stripH;
+    for(let i=0;i<bytes.length;i++){
+      const b=bytes[i];
+      const x=(cachePtr+i)%GW;
+      const y=y0+(((cachePtr+i)/GW)|0)%stripH;
+      const j=idx(x,y);
+      A[j]=(b&0xFF)/255;
+      B[j]=((b*37)&0xFF)/255;
+      C[j]=((b*91)&0xFF)/255;
+    }
+    cachePtr=(cachePtr+bytes.length)%(GW*stripH);
+  }
+
+  // =========================
+  // IndexedDB cache (persistent if https/localhost)
+  // =========================
+  const IDB_OK = (() => {
+    try{
+      return (typeof indexedDB!=="undefined") &&
+        (location.protocol==="https:" || location.hostname==="localhost" || location.hostname==="127.0.0.1");
+    }catch(e){return false;}
+  })();
+
+  function idbOpen(){
+    if(!IDB_OK) return Promise.resolve(null);
+    if(idbOpen._p) return idbOpen._p;
+    idbOpen._p=new Promise((resolve)=>{
+      const req=indexedDB.open("aqai_gifscreen_cache_v3",1);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains("chunks")){
+          const st=db.createObjectStore("chunks",{keyPath:["src","slot"]});
+          st.createIndex("by_src","src",{unique:false});
+        }
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>resolve(null);
+    });
+    return idbOpen._p;
+  }
+
+  const CACHE={ring:220,maxChars:64*1024};
+  async function idbPut(src,seq,text){
+    const db=await idbOpen(); if(!db) return false;
+    const slot=seq % CACHE.ring;
+    return new Promise((resolve)=>{
+      const tx=db.transaction(["chunks"],"readwrite");
+      tx.objectStore("chunks").put({src,slot,seq,text});
+      tx.oncomplete=()=>resolve(true);
+      tx.onerror=()=>resolve(false);
+    });
+  }
+  async function idbLoad(max=140){
+    const db=await idbOpen(); if(!db) return [];
+    return new Promise((resolve)=>{
+      const out=[];
+      const tx=db.transaction(["chunks"],"readonly");
+      const st=tx.objectStore("chunks");
+      const req=st.openCursor();
+      req.onsuccess=()=>{
+        const cur=req.result;
+        if(!cur){resolve(out); return;}
+        out.push(cur.value.text);
+        if(out.length>max) out.shift();
+        cur.continue();
+      };
+      req.onerror=()=>resolve(out);
+    });
+  }
+
+  // =========================
+  // Streaming sources (math) + (images)
+  // =========================
+  const SOURCES = {
+    math: [
+      { name:"GSM8K rows", url:"https://datasets-server.huggingface.co/rows?dataset=openai/gsm8k&config=main&split=train&offset=0&length=200", type:"hf_rows" },
+      { name:"MATH-500 rows", url:"https://datasets-server.huggingface.co/rows?dataset=HuggingFaceH4/MATH-500&config=default&split=test&offset=0&length=100", type:"hf_rows" },
+      { name:"DeepMind arithmetic rows", url:"https://datasets-server.huggingface.co/rows?dataset=donoway/deepmind-math-arithmetic&config=default&split=train&offset=0&length=200", type:"hf_rows" },
+
+      { name:"Wiki: Calculus", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Calculus", type:"wiki_extract" },
+      { name:"Wiki: Linear algebra", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Linear_algebra", type:"wiki_extract" },
+      { name:"Wiki: Real analysis", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Real_analysis", type:"wiki_extract" },
+      { name:"Wiki: Complex analysis", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Complex_analysis", type:"wiki_extract" },
+      { name:"Wiki: Measure theory", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Measure_(mathematics)", type:"wiki_extract" },
+      { name:"Wiki: Functional analysis", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Functional_analysis", type:"wiki_extract" },
+      { name:"Wiki: Group theory", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Group_theory", type:"wiki_extract" },
+      { name:"Wiki: Ring theory", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Ring_(mathematics)", type:"wiki_extract" },
+      { name:"Wiki: Riemann hypothesis", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Riemann_hypothesis", type:"wiki_extract" },
+      { name:"Wiki: Prime number theorem", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Prime_number_theorem", type:"wiki_extract" },
+      { name:"Wiki: Fourier transform", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Fourier_transform", type:"wiki_extract" },
+      { name:"Wiki: Laplace transform", url:"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&origin=*&titles=Laplace_transform", type:"wiki_extract" },
+    ],
+    imageMeta: [
+      { name:"Commons random imageinfo", url:"https://commons.wikimedia.org/w/api.php?action=query&generator=random&grnnamespace=6&prop=imageinfo&iiprop=url|size&format=json&origin=*", type:"commons_random" }
+    ]
+  };
+
+  
+  // Custom streams (persisted in localStorage)
+  const CUSTOM_KEY = "aqai_custom_streams_v1";
+  function loadCustomStreams(){
+    try{
+      const raw = localStorage.getItem(CUSTOM_KEY);
+      if(!raw) return;
+      const arr = JSON.parse(raw);
+      if(!Array.isArray(arr)) return;
+      for(const it of arr){
+        if(!it || typeof it.url!=="string" || !it.url.startsWith("http")) continue;
+        const obj = { name: String(it.name||"Custom stream").slice(0,60), url: it.url, type: it.type || autoType(it.url) };
+        if(obj.type==="commons_random") SOURCES.imageMeta.push(obj);
+        else SOURCES.math.push(obj);
+      }
+      logLine("custom: loaded " + arr.length + " stream(s)");
+    }catch(e){
+      // ignore
+    }
+  }
+  function saveCustomStreams(arr){
+    try{ localStorage.setItem(CUSTOM_KEY, JSON.stringify(arr)); }catch(e){}
+  }
+  function getCustomStreams(){
+    try{
+      const raw = localStorage.getItem(CUSTOM_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    }catch(e){ return []; }
+  }
+  function autoType(url){
+    const u=url.toLowerCase();
+    if(u.includes("commons.wikimedia.org/w/api.php") && u.includes("imageinfo")) return "commons_random";
+    if(u.includes("wikipedia.org/w/api.php") && u.includes("extracts")) return "wiki_extract";
+    if(u.includes("datasets-server.huggingface.co/rows")) return "hf_rows";
+    return "raw_text";
+  }
+  function addCustomStream(){
+    const url = window.prompt("Paste a stream URL (HF /rows or Wikipedia extracts or Commons imageinfo):","");
+    if(!url || typeof url!=="string") return;
+    const name = window.prompt("Name for this stream:", "Custom");
+    const type = autoType(url);
+    const entry = {name: name||"Custom", url, type};
+    const existing = getCustomStreams();
+    existing.push(entry);
+    saveCustomStreams(existing);
+    // apply immediately
+    if(type==="commons_random") SOURCES.imageMeta.push(entry); else SOURCES.math.push(entry);
+    logLine("custom: added " + (name||"Custom"));
+  }
+// Stream state
+  const Stream = {
+    tab:"HOME",
+    prompt:"Explain Noether's theorem and show one concrete example.",
+    out:"",
+    log:[],
+    verified:{},
+    learned:{},
+    failCount:{},
+    bytesBySrc:{},
+    seqBySrc:{},
+    autoText:false,
+    autoImages:false,
+    stop:false,
+    quotaMB:6,
+  };
+
+  function logLine(s){
+    Stream.log.push("[" + new Date().toLocaleTimeString() + "] " + s);
+    if(Stream.log.length>14) Stream.log.shift();
+  }
+
+  async function verifyURL(url, ms=4500){
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(), ms);
+    try{
+      const res=await fetch(url, {mode:"cors", cache:"no-store", signal:ctrl.signal});
+      clearTimeout(t);
+      return {ok:res.ok, code:res.status};
+    }catch(e){
+      clearTimeout(t);
+      return {ok:false, code:(e && e.name) ? e.name : "ERR"};
+    }
+  }
+
+  async function verifyAll(){
+    logLine("verify: start (all sources)");
+    const all = [...SOURCES.math, ...SOURCES.imageMeta];
+    let ok=0, bad=0;
+    for(const s of all){
+      const v=await verifyURL(s.url);
+      Stream.verified[s.url]={...v, at:Date.now()};
+      if(v.ok){ ok++; logLine("verify ok: " + s.name); }
+      else { bad++; logLine("verify fail: " + s.name + " ("+v.code+")"); }
+    }
+    logLine(`verify done: ok=${ok} fail=${bad}`);
+  }
+
+  function extractStrings(obj, maxChars=120000){
+    const out=[];
+    const seen=new Set();
+    function walk(x){
+      if(out.join("\n").length>maxChars) return;
+      if(x==null) return;
+      const t=typeof x;
+      if(t==="string"){
+        const s=x.replace(/\s+/g," ").trim();
+        if(s.length>=20){
+          const k=s.slice(0,120);
+          if(!seen.has(k)){
+            seen.add(k);
+            out.push(s);
+          }
+        }
+        return;
+      }
+      if(t==="number" || t==="boolean") return;
+      if(Array.isArray(x)){
+        for(const it of x) walk(it);
+        return;
+      }
+      if(t==="object"){
+        for(const k of Object.keys(x)) walk(x[k]);
+      }
+    }
+    walk(obj);
+    return out.join("\n");
+  }
+
+  function updateProgress(srcKey, bytes){
+    Stream.bytesBySrc[srcKey]=(Stream.bytesBySrc[srcKey]||0)+bytes;
+    const cap = Stream.quotaMB*1024*1024;
+    if(Stream.bytesBySrc[srcKey] >= cap) Stream.learned[srcKey]=true;
+  }
+
+  function srcKeyFor(s){ return s.type + "::" + s.name; }
+
+  function bumpRowsURL(url){
+    try{
+      const u=new URL(url);
+      const off = parseInt(u.searchParams.get("offset")||"0",10);
+      const len = parseInt(u.searchParams.get("length")||"200",10);
+      u.searchParams.set("offset", String(off + len));
+      u.searchParams.set("length", String(len));
+      return u.toString();
+    }catch(e){
+      return url;
+    }
+  }
+
+  async function fetchAndIngest(source){
+    const key=srcKeyFor(source);
+    const v=Stream.verified[source.url];
+    if(v && !v.ok){
+      Stream.failCount[key]=(Stream.failCount[key]||0)+1;
+      return {ok:false, why:"not-verified"};
+    }
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(), 12000);
+    try{
+      const res=await fetch(source.url, {mode:"cors", cache:"no-store", signal:ctrl.signal});
+      clearTimeout(t);
+      if(!res.ok) return {ok:false, why:"http-"+res.status};
+
+      const ctype=(res.headers.get("content-type")||"").toLowerCase();
+      let textChunk="";
+
+      if(ctype.includes("application/json") || source.type!=="raw_text"){
+        const json=await res.json();
+
+        if(source.type==="hf_rows"){
+          const rows = json && json.rows ? json.rows : [];
+          const extracted = [];
+          for(const r of rows){
+            if(r && r.row) extracted.push(extractStrings(r.row, 20000));
+            else extracted.push(extractStrings(r, 20000));
+          }
+          textChunk = extracted.join("\n\n");
+          source.url = bumpRowsURL(source.url);
+        } else if(source.type==="wiki_extract"){
+          const pages = json && json.query && json.query.pages ? json.query.pages : {};
+          const firstKey = Object.keys(pages)[0];
+          const page = firstKey ? pages[firstKey] : null;
+          textChunk = page && page.extract ? page.extract : extractStrings(json, 60000);
+        } else {
+          textChunk = extractStrings(json, 80000);
+        }
+      } else {
+        textChunk = await res.text();
+      }
+
+      if(textChunk){
+        ingestText(textChunk);
+        burn(textChunk);
+        const encBytes = new TextEncoder().encode(textChunk.slice(0, 200000));
+        updateProgress(key, encBytes.byteLength);
+        Stream.seqBySrc[key]=(Stream.seqBySrc[key]||0)+1;
+        if(IDB_OK) await idbPut(key, Stream.seqBySrc[key], textChunk.slice(0, CACHE.maxChars));
+      }
+
+      return {ok:true, bytes:textChunk?textChunk.length:0};
+    }catch(e){
+      clearTimeout(t);
+      return {ok:false, why:(e && e.name) ? e.name : "err"};
+    }
+  }
+
+  async function autoLearnText(){
+    if(Stream.autoText) return;
+    Stream.autoText=true; Stream.stop=false;
+    logLine("AUTO TEXT: ON (runs until all sources reach quota)");
+    if(Object.keys(Stream.verified).length===0) await verifyAll();
+
+    const list = SOURCES.math.slice();
+    let guard=0;
+    while(Stream.autoText && !Stream.stop){
+      guard++;
+      if(guard>10000){ logLine("AUTO TEXT: guard stop"); break; }
+
+      let next = null;
+      for(const s of list){
+        const key=srcKeyFor(s);
+        const ok = Stream.verified[s.url] ? Stream.verified[s.url].ok : true;
+        if(ok && !Stream.learned[key]){ next=s; break; }
+      }
+      if(!next){
+        logLine("AUTO TEXT: ALL SOURCES LEARNED ✅");
+        Stream.autoText=false;
+        break;
+      }
+
+      const key=srcKeyFor(next);
+      const res = await fetchAndIngest(next);
+      if(res.ok){
+        logLine("learn ok: " + next.name + " bytes~" + (res.bytes||0));
+        splash(rand(0,W), rand(0,H*0.65), 18, 0.45);
+        PPU.coherence = clamp(PPU.coherence + 0.01, 0, 1);
+      }else{
+        Stream.failCount[key]=(Stream.failCount[key]||0)+1;
+        logLine("learn fail: " + next.name + " (" + res.why + ")");
+        await new Promise(r=>setTimeout(r, 650));
+      }
+      await new Promise(r=>setTimeout(r, 220));
+    }
+    Stream.autoText=false;
+    logLine("AUTO TEXT: OFF");
+  }
+
+  function stopAll(){
+    Stream.stop=true;
+    Stream.autoText=false;
+    Stream.autoImages=false;
+    logLine("STOP: all auto loops OFF");
+  }
+
+  // =========================
+  // Image stream training (Commons random images + analysis injection)
+  // =========================
+  const ImgTrain = {
+    preview:null,
+    previewCtx:null,
+    lastInfo:"",
+    lastURL:"",
+    lastSize:"",
+    tick:0,
+  };
+
+
+  // Procedural Image Generator (offline, prompt-driven)
+  const ImgGen = {
+    prompt: "black hole lensing ring",
+    seed: 1337,
+    lastMode: "bh",
+    variation: 0
+  };
+
+  function hashSeed(s){
+    const str = String(s||"");
+    let h1 = 0x811c9dc5;
+    for(let i=0;i<str.length;i++){
+      h1 ^= str.charCodeAt(i);
+      h1 = (h1 * 0x01000193) >>> 0;
+    }
+    return h1 >>> 0;
+  }
+
+  function pickMode(prompt){
+    const p=(prompt||"").toLowerCase();
+    if(p.includes("black") || p.includes("hole") || p.includes("lensing") || p.includes("disk")) return "bh";
+    if(p.includes("butterfly") || p.includes("chaos") || p.includes("lorenz")) return "butterfly";
+    if(p.includes("navier") || p.includes("stokes") || p.includes("fluid") || p.includes("vortex")) return "flow";
+    if(p.includes("mandelbrot") || p.includes("fractal")) return "fractal";
+    if(p.includes("wave") || p.includes("interference") || p.includes("helmh")) return "wave";
+    return "noise";
+  }
+
+  function seededRand(seed){
+    // xorshift32
+    let x = seed>>>0;
+    return () => {
+      x ^= (x << 13) >>> 0;
+      x ^= (x >>> 17) >>> 0;
+      x ^= (x << 5) >>> 0;
+      return (x>>>0) / 4294967296;
+    };
+  }
+
+  function makeGenCanvas(w=256,h=192){
+    const c=document.createElement("canvas");
+    c.width=w; c.height=h;
+    const cctx=c.getContext("2d");
+    const img=cctx.createImageData(w,h);
+    return {c,cctx,img,data:img.data,w,h};
+  }
+
+  function genBH(data,w,h,seed){
+    const rnd=seededRand(seed);
+    const cx=w*0.5, cy=h*0.5;
+    const r0=Math.min(w,h)*0.18*(0.85+0.25*rnd());
+    const ringW=r0*(0.10+0.08*rnd());
+    const glow=r0*(0.45+0.20*rnd());
+    const spin= (rnd()*2-1) * 0.8;
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const dx=(x-cx)/w, dy=(y-cy)/h;
+        const rr=Math.sqrt(dx*dx+dy*dy);
+        const ang=Math.atan2(dy,dx);
+        const lens = 1/(1+20*rr*rr);
+        const ring = Math.exp(-((rr - r0/w*1.7)**2)/(2*(ringW/w*1.7)**2));
+        const halo = Math.exp(-(rr**2)/(2*(glow/w*1.7)**2));
+        const swirl = 0.5+0.5*Math.sin(10*ang + 30*rr + 6*spin);
+        const shade = 0.10 + 0.85*halo*swirl + 0.95*ring;
+        const dark = Math.exp(-(rr**2)/(2*(r0/w*1.15)**2));
+        const v = Math.max(0, shade - 0.95*dark);
+        const i=(y*w+x)*4;
+        data[i]   = Math.min(255, 255*(0.25*v + 0.10*halo + 0.08*lens));
+        data[i+1] = Math.min(255, 255*(0.18*v + 0.08*halo));
+        data[i+2] = Math.min(255, 255*(0.40*v + 0.14*halo + 0.10*ring));
+        data[i+3]=255;
+      }
+    }
+  }
+
+  function genButterfly(data,w,h,seed){
+    const rnd=seededRand(seed);
+    const a=10 + 4*rnd(), b=28 + 8*rnd(), c=2.0 + 0.6*rnd();
+    let x=0.01, y=0.0, z=0.0;
+    const cx=w*0.5, cy=h*0.55;
+    // clear
+    for(let i=0;i<data.length;i+=4){ data[i]=0; data[i+1]=0; data[i+2]=0; data[i+3]=255; }
+    const steps=220000;
+    for(let t=0;t<steps;t++){
+      const dx = a*(y-x);
+      const dy = x*(b-z)-y;
+      const dz = x*y - c*z;
+      x += dx*0.005;
+      y += dy*0.005;
+      z += dz*0.005;
+      const px = Math.floor(cx + (x*7));
+      const py = Math.floor(cy - (z*6));
+      if(px>=0 && px<w && py>=0 && py<h){
+        const i=(py*w+px)*4;
+        data[i]   = Math.min(255, data[i]   + 6);
+        data[i+1] = Math.min(255, data[i+1] + 10);
+        data[i+2] = Math.min(255, data[i+2] + 18);
+      }
+    }
+  }
+
+  function genFlow(data,w,h,seed){
+    const rnd=seededRand(seed);
+    const freq=2.0+2.0*rnd();
+    const vort=1.5+2.5*rnd();
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const u=(x/w-0.5), v=(y/h-0.5);
+        const r=Math.sqrt(u*u+v*v)+1e-6;
+        const ang=Math.atan2(v,u);
+        const phi = freq*Math.sin(6*ang + vort/r) + 0.8*Math.sin(12*r + 3*ang);
+        const s = 0.5+0.5*Math.sin(phi);
+        const t = 0.5+0.5*Math.sin(phi + 2.1);
+        const i=(y*w+x)*4;
+        data[i]   = Math.floor(255*(0.08 + 0.85*s));
+        data[i+1] = Math.floor(255*(0.06 + 0.80*t));
+        data[i+2] = Math.floor(255*(0.10 + 0.55*(1-s)));
+        data[i+3]=255;
+      }
+    }
+  }
+
+  function genFractal(data,w,h,seed){
+    const rnd=seededRand(seed);
+    const cx=-0.6 + 0.2*(rnd()*2-1);
+    const cy=0.0 + 0.2*(rnd()*2-1);
+    const zoom=1.2 + 1.3*rnd();
+    const maxI=70;
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        let a = (x/w-0.5)*2.8/zoom + cx;
+        let b = (y/h-0.5)*2.0/zoom + cy;
+        let za=0, zb=0, it=0;
+        while(it<maxI && (za*za+zb*zb)<4){
+          const naa=za*za - zb*zb + a;
+          const nbb=2*za*zb + b;
+          za=naa; zb=nbb; it++;
+        }
+        const t = it/maxI;
+        const i=(y*w+x)*4;
+        data[i]   = Math.floor(255*(0.10 + 0.90*t));
+        data[i+1] = Math.floor(255*(0.06 + 0.70*(1-t)));
+        data[i+2] = Math.floor(255*(0.12 + 0.85*(0.5+0.5*Math.sin(6*t))));
+        data[i+3]=255;
+      }
+    }
+  }
+
+  function genWave(data,w,h,seed){
+    const rnd=seededRand(seed);
+    const k1=8+10*rnd(), k2=9+12*rnd(), k3=6+8*rnd();
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const u=(x/w-0.5)*2, v=(y/h-0.5)*2;
+        const s = Math.sin(k1*u) + Math.sin(k2*v) + Math.sin(k3*(u+v));
+        const t = 0.5+0.5*Math.sin(2.2*s);
+        const i=(y*w+x)*4;
+        data[i]   = Math.floor(255*(0.08 + 0.92*t));
+        data[i+1] = Math.floor(255*(0.10 + 0.72*(1-t)));
+        data[i+2] = Math.floor(255*(0.15 + 0.65*(0.5+0.5*Math.sin(8*t))));
+        data[i+3]=255;
+      }
+    }
+  }
+
+  function genNoise(data,w,h,seed){
+    const rnd=seededRand(seed);
+    for(let i=0;i<data.length;i+=4){
+      const v = rnd();
+      data[i]   = Math.floor(255*(0.15+0.85*v));
+      data[i+1] = Math.floor(255*(0.10+0.60*v));
+      data[i+2] = Math.floor(255*(0.18+0.70*(1-v)));
+      data[i+3]=255;
+    }
+  }
+
+  function generateImageFromPrompt(prompt, variation=0){
+    ImgGen.prompt = prompt || ImgGen.prompt;
+    ImgGen.variation = variation|0;
+    ImgGen.seed = (hashSeed(ImgGen.prompt) ^ (ImgGen.variation*0x9e3779b9)) >>> 0;
+    ImgGen.lastMode = pickMode(ImgGen.prompt);
+
+    const g = makeGenCanvas(256,192);
+    const data=g.data, w=g.w, h=g.h;
+    const seed=ImgGen.seed;
+
+    if(ImgGen.lastMode==="bh") genBH(data,w,h,seed);
+    else if(ImgGen.lastMode==="butterfly") genButterfly(data,w,h,seed);
+    else if(ImgGen.lastMode==="flow") genFlow(data,w,h,seed);
+    else if(ImgGen.lastMode==="fractal") genFractal(data,w,h,seed);
+    else if(ImgGen.lastMode==="wave") genWave(data,w,h,seed);
+    else genNoise(data,w,h,seed);
+
+    g.cctx.putImageData(g.img,0,0);
+    ImgTrain.preview = g.c;
+    ImgTrain.previewCtx = g.cctx;
+    ImgTrain.lastURL = "(generated)";
+    ImgTrain.lastSize = w+"x"+h;
+    ImgTrain.lastInfo = "GEN: " + ImgGen.lastMode + " :: " + ImgGen.prompt.slice(0,60);
+
+    const st = analyzePreview({canvas:g.c, ctx:g.cctx});
+    injectFromImageStats(st);
+    const line = `IMGGEN seed=${seed} mode=${ImgGen.lastMode} edge=${st.edge.toFixed(2)} :: ${ImgGen.prompt}`;
+    ingestText(line);
+    burn(line);
+    logLine(line);
+    return true;
+  }
+
+  function savePreviewPNG(){
+    if(!ImgTrain.preview){ logLine("save: no preview"); return; }
+    try{
+      const a=document.createElement("a");
+      a.download="aqai_generated.png";
+      a.href=ImgTrain.preview.toDataURL("image/png");
+      a.click();
+      logLine("save: png downloaded");
+    }catch(e){
+      logLine("save: blocked");
+    }
+  }
+
+
+  async function fetchCommonsRandom(){
+    const src=SOURCES.imageMeta[0];
+    const v=Stream.verified[src.url];
+    if(v && !v.ok) return {ok:false, why:"meta-not-verified"};
+    const res=await fetch(src.url, {mode:"cors", cache:"no-store"});
+    if(!res.ok) return {ok:false, why:"meta-http-"+res.status};
+    const json=await res.json();
+    const pages = json && json.query && json.query.pages ? json.query.pages : {};
+    const k = Object.keys(pages)[0];
+    const page = k ? pages[k] : null;
+    const ii = page && page.imageinfo && page.imageinfo[0] ? page.imageinfo[0] : null;
+    const url = ii && ii.url ? ii.url : null;
+    const w = ii && ii.width ? ii.width : null;
+    const h = ii && ii.height ? ii.height : null;
+    const title = page && page.title ? page.title : "Commons file";
+    if(!url) return {ok:false, why:"no-url"};
+    return {ok:true, url, w, h, title};
+  }
+
+  async function fetchImageToPreview(url){
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(), 15000);
+    try{
+      const res=await fetch(url, {mode:"cors", cache:"no-store", signal:ctrl.signal});
+      clearTimeout(t);
+      if(!res.ok) return {ok:false, why:"img-http-"+res.status};
+      const blob=await res.blob();
+      const bmp=await createImageBitmap(blob);
+      const pw=200, ph=150;
+      const c=document.createElement("canvas");
+      c.width=pw; c.height=ph;
+      const cctx=c.getContext("2d");
+      cctx.drawImage(bmp, 0,0,pw,ph);
+      return {ok:true, canvas:c, ctx:cctx, w:bmp.width, h:bmp.height};
+    }catch(e){
+      clearTimeout(t);
+      return {ok:false, why:(e && e.name) ? e.name : "img-err"};
+    }
+  }
+
+  function analyzePreview(pre){
+    const pw=pre.canvas.width, ph=pre.canvas.height;
+    const data=pre.ctx.getImageData(0,0,pw,ph).data;
+    let r=0,g=0,b=0, edge=0, n=0;
+    for(let y=1;y<ph-1;y+=2){
+      for(let x=1;x<pw-1;x+=2){
+        const p=(y*pw+x)*4;
+        const rr=data[p], gg=data[p+1], bb=data[p+2];
+        r+=rr; g+=gg; b+=bb; n++;
+        const pR=(y*pw+(x+1))*4;
+        const pD=((y+1)*pw+x)*4;
+        edge += Math.abs(rr-data[pR]) + Math.abs(rr-data[pD])
+              + Math.abs(gg-data[pR+1]) + Math.abs(gg-data[pD+1])
+              + Math.abs(bb-data[pR+2]) + Math.abs(bb-data[pD+2]);
+      }
+    }
+    const rA=r/n, gA=g/n, bA=b/n;
+    const edgeA=edge/(n*3*255*2);
+    return {r:rA,g:gA,b:bA,edge:clamp(edgeA,0,1)};
+  }
+
+  function injectFromImageStats(st){
+    const cx=Math.floor(GW*0.5), cy=Math.floor(GH*0.40);
+    const R=Math.floor(Math.min(GW,GH)*0.22);
+    const lum=(0.2126*st.r+0.7152*st.g+0.0722*st.b)/255;
+    for(let y=cy-R-2;y<=cy+R+2;y++){
+      if(y<2||y>=GH-2) continue;
+      for(let x=cx-R-2;x<=cx+R+2;x++){
+        if(x<2||x>=GW-2) continue;
+        const dx=x-cx, dy=y-cy;
+        const rr=Math.sqrt(dx*dx+dy*dy);
+        const ring=Math.exp(-((rr-R*(0.86+0.06*Math.sin(ImgTrain.tick*0.7)))**2)/(2*(2.2**2)));
+        const i=idx(x,y);
+        A[i]=clamp(A[i]+0.30*ring*(0.3+0.7*lum),0,1);
+        B[i]=clamp(B[i]+0.18*ring*(0.3+0.7*st.edge),0,1);
+        C[i]=clamp(C[i]+0.10*ring*(0.2+0.8*(1-st.edge)),0,1);
+      }
+    }
+    const k = 1 + Math.floor(4*st.edge);
+    for(let i=0;i<k;i++) splash(rand(0,W), rand(0,H*0.6), 12+26*st.edge, 0.55);
+  }
+
+  async function autoImageTrain(){
+    if(Stream.autoImages) return;
+    Stream.autoImages=true; Stream.stop=false;
+    logLine("AUTO IMG: ON (keeps streaming images until you stop)");
+    if(Object.keys(Stream.verified).length===0) await verifyAll();
+
+    while(Stream.autoImages && !Stream.stop){
+      const meta = await fetchCommonsRandom();
+      if(!meta.ok){ logLine("img meta fail: " + meta.why); await new Promise(r=>setTimeout(r, 900)); continue; }
+
+      const pre = await fetchImageToPreview(meta.url);
+      if(!pre.ok){ logLine("img fetch fail: " + pre.why); await new Promise(r=>setTimeout(r, 900)); continue; }
+
+      ImgTrain.preview = pre.canvas;
+      ImgTrain.previewCtx = pre.ctx;
+      ImgTrain.lastURL = meta.url;
+      ImgTrain.lastSize = (meta.w && meta.h) ? (meta.w+"x"+meta.h) : (pre.w+"x"+pre.h);
+      ImgTrain.lastInfo = meta.title;
+
+      const st = analyzePreview(pre);
+      const line = `IMG ${ImgTrain.lastSize} avgRGB=(${st.r.toFixed(0)},${st.g.toFixed(0)},${st.b.toFixed(0)}) edge=${st.edge.toFixed(2)} :: ${meta.title}`;
+      logLine(line);
+      ingestText(meta.title + ". " + line);
+      burn(line);
+      injectFromImageStats(st);
+      PPU.coherence = clamp(PPU.coherence + 0.01*(0.5+st.edge), 0, 1);
+
+      await new Promise(r=>setTimeout(r, 1500));
+    }
+    Stream.autoImages=false;
+    logLine("AUTO IMG: OFF");
+  }
+
+  // =========================
+  // UI (drawn) + hit testing
+  // =========================
+  const rect=(x,y,w,h)=>({x,y,w,h});
+  const hit=(r,px,py)=>(px>=r.x && px<=r.x+r.w && py>=r.y && py<=r.y+r.h);
+
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){
+    if(w<2*r) r=w/2;
+    if(h<2*r) r=h/2;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+
+  function button(x,y,w,h,label,active=false,small=false){
+    ctx.save();
+    ctx.fillStyle = active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.07)";
+    ctx.strokeStyle = active ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.16)";
+    ctx.lineWidth=1;
+    roundRect(ctx,x,y,w,h,10,true,true);
+    ctx.fillStyle="rgba(255,255,255,0.92)";
+    ctx.font = (small? "12px":"14px") + " system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="middle";
+    ctx.fillText(label, x+10, y+h/2);
+    ctx.restore();
+  }
+
+  function wrapText(text,x,y,maxW,lineH,maxLines){
+    ctx.save();
+    ctx.fillStyle="rgba(245,245,255,0.92)";
+    ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="top";
+    const words=String(text||"").split(/\s+/);
+    let line="", yy=y, lines=0;
+    for(const w of words){
+      const test=line? (line+" "+w): w;
+      if(ctx.measureText(test).width>maxW){
+        ctx.fillText(line,x,yy);
+        yy+=lineH; line=w; lines++;
+        if(lines>=maxLines) break;
+      }else line=test;
+    }
+    if(lines<maxLines && line) ctx.fillText(line,x,yy);
+    ctx.restore();
+  }
+
+  function layout(){
+    const pad=10, tabH=44;
+    const w=(W-2*pad)/5;
+    const tabs=[
+      {name:"HOME", r:rect(pad+w*0, H-tabH, w, tabH)},
+      {name:"LLM", r:rect(pad+w*1, H-tabH, w, tabH)},
+      {name:"MATH", r:rect(pad+w*2, H-tabH, w, tabH)},
+      {name:"IMG", r:rect(pad+w*3, H-tabH, w, tabH)},
+      {name:"PPU", r:rect(pad+w*4, H-tabH, w, tabH)},
+    ];
+    return {pad,tabH,tabs};
+  }
+
+  function copyLinksToClipboard(){
+    const all = [];
+    all.push("# Math streams");
+    for(const s of SOURCES.math) all.push(s.url);
+    all.push("\n# Image meta streams");
+    for(const s of SOURCES.imageMeta) all.push(s.url);
+    const text = all.join("\n");
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(()=>logLine("copy: links copied ✅")).catch(()=>logLine("copy: clipboard blocked"));
+    }else{
+      window.prompt("Copy links:", text);
+    }
+  }
+
+  // =========================
+  // Interaction (pointer)
+  // =========================
+  let down=false;
+  canvas.addEventListener("pointerdown", (e)=>{
+    down=true;
+    const x=e.clientX, y=e.clientY;
+    handleTap(x,y);
+    splash(x,y,22,0.9);
+    e.preventDefault();
+  }, {passive:false});
+
+  canvas.addEventListener("pointermove",(e)=>{
+    if(!down) return;
+    splash(e.clientX, e.clientY, 18, 0.55);
+  }, {passive:true});
+
+  window.addEventListener("pointerup", ()=>down=false, {passive:true});
+
+  async function handleTap(x,y){
+    const L=layout();
+    for(const t of L.tabs){
+      if(hit(t.r,x,y)){
+        Stream.tab=t.name;
+        logLine("tab: " + t.name);
+        return;
+      }
+    }
+
+    if(Stream.tab==="HOME"){
+      const bVerify=rect(12,62,96,36);
+      const bCopy=rect(112,62,96,36);
+      const bAdd=rect(212,62,96,36);
+      const bStop=rect(312,62,76,36);
+      if(hit(bVerify,x,y)) return verifyAll();
+      if(hit(bCopy,x,y)) return copyLinksToClipboard();
+      if(hit(bAdd,x,y)) return addCustomStream();
+      if(hit(bStop,x,y)) return stopAll();
+
+      const quotaBox=rect(12,108,W-24,56);
+      if(hit(quotaBox,x,y)){
+        const v=window.prompt("Per-source quota MB (defines 'learned fully'):", String(Stream.quotaMB));
+        const n=parseFloat(v);
+        if(Number.isFinite(n) && n>0.25 && n<=50) Stream.quotaMB=n;
+        logLine("quotaMB = " + Stream.quotaMB);
+        return;
+      }
+    }
+
+    if(Stream.tab==="LLM"){
+      const bRun=rect(12,62,120,36);
+      const bClear=rect(140,62,120,36);
+      const bPrompt=rect(12,108,W-24,56);
+      if(hit(bRun,x,y)){
+        const best=generateBest(Stream.prompt, 1500, 4);
+        Stream.out=best.text;
+        logLine(`gen: coh=${best.coh.toFixed(2)} rel=${best.rel.toFixed(2)} iter=${best.i}/${best.iters}`);
+        burn(best.text);
+        for(let k=0;k<5;k++) splash(rand(0,W), rand(0,H*0.7), 24+18*Math.random(), 0.7);
+        return;
+      }
+      if(hit(bClear,x,y)){ Stream.out=""; return; }
+      if(hit(bPrompt,x,y)){
+        const v=window.prompt("Edit prompt:", Stream.prompt);
+        if(typeof v==="string") Stream.prompt=v;
+        return;
+      }
+    }
+
+    if(Stream.tab==="MATH"){
+      const bAuto=rect(12,62,160,36);
+      const bStop=rect(180,62,110,36);
+      const bReset=rect(298,62,90,36);
+      if(hit(bAuto,x,y)) return autoLearnText();
+      if(hit(bStop,x,y)) return stopAll();
+      if(hit(bReset,x,y)){
+        Stream.learned={}; Stream.bytesBySrc={}; Stream.failCount={};
+        logLine("math: progress reset");
+        return;
+      }
+      const bOne=rect(12,108,160,36);
+      if(hit(bOne,x,y)){
+        const list=SOURCES.math;
+        for(const s of list){
+          const key=srcKeyFor(s);
+          if(!Stream.learned[key]){
+            const res=await fetchAndIngest(s);
+            logLine(res.ok ? ("learn ok: "+s.name) : ("learn fail: "+s.name+" ("+res.why+")"));
+            return;
+          }
+        }
+        logLine("math: nothing left (all learned)");
+        return;
+      }
+    }
+
+    if(Stream.tab==="IMG"){
+      const bAuto=rect(12,62,160,36);
+      const bStop=rect(180,62,110,36);
+      const bClear=rect(298,62,90,36);
+      if(hit(bAuto,x,y)) return autoImageTrain();
+      if(hit(bStop,x,y)) return stopAll();
+      if(hit(bClear,x,y)){
+        ImgTrain.preview=null; ImgTrain.lastInfo=""; ImgTrain.lastURL=""; ImgTrain.lastSize="";
+        logLine("img: cleared preview");
+        return;
+      }
+
+      // Offline image generation controls
+      const bGen=rect(12,108,110,36);
+      const bVar=rect(130,108,110,36);
+      const bPrompt=rect(248,108,W-260,36);
+      const bSave=rect(W-92,108,80,36);
+
+      if(hit(bGen,x,y)){
+        generateImageFromPrompt(ImgGen.prompt, ImgGen.variation);
+        return;
+      }
+      if(hit(bVar,x,y)){
+        ImgGen.variation = (ImgGen.variation + 1) % 9999;
+        generateImageFromPrompt(ImgGen.prompt, ImgGen.variation);
+        return;
+      }
+      if(hit(bPrompt,x,y)){
+        const v=window.prompt("Image prompt (keywords: black hole / butterfly / navier stokes / fractal / wave):", ImgGen.prompt);
+        if(typeof v==="string" && v.trim()) ImgGen.prompt=v.trim();
+        logLine("img prompt: " + ImgGen.prompt.slice(0,70));
+        return;
+      }
+      if(hit(bSave,x,y)){
+        savePreviewPNG();
+        return;
+      }
+    }
+
+    if(Stream.tab==="PPU"){
+      const bPulse=rect(12,62,120,36);
+      const bBoost=rect(140,62,120,36);
+      const bCalm=rect(268,62,120,36);
+      if(hit(bPulse,x,y)){
+        for(let i=0;i<PPU.poles.length;i++) PPU.poleVel[i]+=rand(-0.8,0.8);
+        splash(W*0.5,H*0.4,60,1.0);
+        logLine("ppu: pulse poles");
+        return;
+      }
+      if(hit(bBoost,x,y)){ PPU.coherence=clamp(PPU.coherence+0.08,0,1); logLine("ppu: boost"); return; }
+      if(hit(bCalm,x,y)){ PPU.coherence=clamp(PPU.coherence-0.08,0,1); logLine("ppu: calm"); return; }
+    }
+  }
+
+  // =========================
+  // Render UI
+  // =========================
+  function renderHUD(){
+    ctx.save();
+    ctx.fillStyle="rgba(0,0,0,0.34)";
+    ctx.fillRect(0,0,W,54);
+    ctx.fillStyle="rgba(0,0,0,0.30)";
+    ctx.fillRect(0,H-44,W,44);
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle="rgba(255,255,255,0.92)";
+    ctx.font="16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline="middle";
+    ctx.fillText("AQAI GIFLife Screen • math stream train + image stream train • PPU+AQC", 12, 18);
+    ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillStyle="rgba(210,220,255,0.88)";
+    ctx.fillText("HOME: verify/copy | MATH: auto-train until all sources reach quota | IMG: auto image stream", 12, 38);
+    ctx.restore();
+
+    const L=layout();
+    for(const t of L.tabs){
+      ctx.save();
+      const active=(Stream.tab===t.name);
+      ctx.fillStyle=active? "rgba(255,255,255,0.12)":"rgba(255,255,255,0.05)";
+      ctx.strokeStyle=active? "rgba(255,255,255,0.25)":"rgba(255,255,255,0.12)";
+      ctx.lineWidth=1;
+      roundRect(ctx,t.r.x+2,t.r.y+6,t.r.w-4,t.r.h-12,10,true,true);
+      ctx.fillStyle=active? "rgba(255,255,255,0.95)":"rgba(200,210,255,0.74)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="middle";
+      ctx.fillText(t.name, t.r.x+14, t.r.y+22);
+      ctx.restore();
+    }
+
+    if(Stream.tab==="HOME"){
+      button(12,62,96,36,"VERIFY",false,false);
+      button(112,62,96,36,"COPY",false,false);
+      button(212,62,96,36,"ADD",false,false);
+      button(312,62,76,36,"STOP",false,false);
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.30)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,108,W-24,56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Per-source quota MB (defines when a text source is 'learned fully') — tap to edit:", 22, 116);
+      ctx.fillStyle="rgba(255,255,255,0.92)";
+      ctx.font="16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(String(Stream.quotaMB) + " MB", 22, 136);
+      ctx.restore();
+
+      const all = [...SOURCES.math, ...SOURCES.imageMeta];
+      const ok = all.filter(s => Stream.verified[s.url] && Stream.verified[s.url].ok).length;
+      const bad = all.filter(s => Stream.verified[s.url] && Stream.verified[s.url] && !Stream.verified[s.url].ok).length;
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.26)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,176,W-24,88,12,true,true);
+      ctx.fillStyle="rgba(255,255,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Verification summary:", 22, 186);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.fillText("ok=" + ok + " fail=" + bad + " (tap VERIFY ALL to test in your browser)", 22, 206);
+      ctx.fillText("IDB cache: " + (IDB_OK ? "ON (persistent)" : "OFF (file://)"), 22, 226);
+      ctx.restore();
+    }
+
+    if(Stream.tab==="LLM"){
+      button(12,62,120,36,"RUN",false,false);
+      button(140,62,120,36,"CLEAR",false,false);
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.30)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,108,W-24,56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Prompt (tap to edit):", 22, 116);
+      wrapText(Stream.prompt, 22, 134, W-44, 16, 2);
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.26)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      const outY=176;
+      roundRect(ctx,12,outY,W-24,H-outY-56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Output:", 22, outY+10);
+      wrapText(Stream.out || "(stream math first, then ask; tap RUN)", 22, outY+30, W-44, 16, 22);
+      ctx.restore();
+    }
+
+    if(Stream.tab==="MATH"){
+      button(12,62,160,36, Stream.autoText ? "AUTO ON" : "AUTO TRAIN", Stream.autoText, false);
+      button(180,62,110,36,"STOP",false,false);
+      button(298,62,90,36,"RESET",false,true);
+      button(12,108,160,36,"ONE STEP",false,false);
+
+      const list=SOURCES.math;
+      const learnedCount = list.filter(s => Stream.learned[srcKeyFor(s)]).length;
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.26)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,154,W-24,84,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Math sources learned: " + learnedCount + "/" + list.length, 22, 164);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.fillText("Quota per source: " + Stream.quotaMB + "MB  | corpus docs: " + Corpus.docs.length, 22, 186);
+      ctx.fillText("If some links fail due to CORS/auth, they will be skipped after verify.", 22, 206);
+      ctx.restore();
+    }
+
+    if(Stream.tab==="IMG"){
+      button(12,62,160,36, Stream.autoImages ? "AUTO ON" : "AUTO IMG TRAIN", Stream.autoImages, false);
+      button(180,62,110,36,"STOP",false,false);
+      button(298,62,90,36,"CLEAR",false,true);
+
+      // Image generation controls (offline)
+      button(12,108,110,36,"GEN",false,false);
+      button(130,108,110,36,"VAR",false,false);
+      button(248,108,W-260,36,"PROMPT",false,true);
+      button(W-92,108,80,36,"SAVE",false,true);
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.26)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,154,W-24,160,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Image stream + generator (tap GEN/VAR/PROMPT).", 22, 162);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(ImgTrain.lastInfo || "(no preview yet — tap GEN or AUTO IMG TRAIN)", 22, 182);
+      ctx.fillStyle="rgba(210,220,255,0.88)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(ImgTrain.lastSize ? ("size: " + ImgTrain.lastSize) : "", 22, 204);
+      ctx.fillText("prompt: " + (ImgGen.prompt||"").slice(0,64), 22, 222);
+      if(ImgTrain.preview){
+        ctx.drawImage(ImgTrain.preview, W-222, 170, 200, 150);
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.24)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      const logY=330;
+      roundRect(ctx,12,logY,W-24,H-logY-56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Log:", 22, logY+10);
+      let yy=logY+28;
+      for(const line of Stream.log.slice(-10)){
+        ctx.fillStyle="rgba(235,235,255,0.88)";
+        ctx.fillText(line, 22, yy);
+        yy += 16;
+      }
+      ctx.restore();
+    }
+
+    if(Stream.tab==="PPU"){
+      button(12,62,120,36,"PULSE",false,false);
+      button(140,62,120,36,"BOOST",false,false);
+      button(268,62,120,36,"CALM",false,false);
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.26)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      roundRect(ctx,12,108,W-24,160,12,true,true);
+      ctx.fillStyle="rgba(245,245,255,0.92)";
+      ctx.font="14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Coherence: " + PPU.coherence.toFixed(2) + "  Smooth: " + PPU.smooth.toFixed(2) + "  Entropy: " + PPU.entropy.toFixed(2), 22, 118);
+
+      const x0=22, y0=150, ww=W-44, hh=90;
+      const n=PPU.poles.length;
+      for(let i=0;i<n;i++){
+        const bx=x0 + i*(ww/n);
+        const bw=(ww/n)-3;
+        const mid=y0+hh/2;
+        const amp=clamp(PPU.poles[i],-1,1);
+        const hbar=amp*(hh*0.42);
+        ctx.fillStyle="rgba(255,255,255,0.14)";
+        ctx.fillRect(bx, mid, bw, -hbar);
+        ctx.strokeStyle="rgba(255,255,255,0.10)";
+        ctx.strokeRect(bx, y0, bw, hh);
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.24)";
+      ctx.strokeStyle="rgba(255,255,255,0.14)";
+      const logY=330;
+      roundRect(ctx,12,logY,W-24,H-logY-56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Log:", 22, logY+10);
+      let yy=logY+28;
+      for(const line of Stream.log.slice(-10)){
+        ctx.fillStyle="rgba(235,235,255,0.88)";
+        ctx.fillText(line, 22, yy);
+        yy+=16;
+      }
+      ctx.restore();
+    }
+
+    if(Stream.tab==="HOME" || Stream.tab==="MATH" || Stream.tab==="LLM"){
+      ctx.save();
+      ctx.fillStyle="rgba(0,0,0,0.24)";
+      ctx.strokeStyle="rgba(255,255,255,0.12)";
+      const logY=330;
+      roundRect(ctx,12,logY,W-24,H-logY-56,12,true,true);
+      ctx.fillStyle="rgba(200,210,255,0.82)";
+      ctx.font="12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textBaseline="top";
+      ctx.fillText("Log:", 22, logY+10);
+      let yy=logY+28;
+      for(const line of Stream.log.slice(-10)){
+        ctx.fillStyle="rgba(235,235,255,0.88)";
+        ctx.fillText(line, 22, yy);
+        yy+=16;
+      }
+      ctx.restore();
+    }
+  }
+
+  // =========================
+  // Simulation loop
+  // =========================
+  let lastT=now();
+  function step(dt){
+    ppuStep(dt);
+
+    const feed = 0.035 + 0.020*(1-PPU.coherence);
+    const kill = 0.055 + 0.020*(PPU.entropy);
+    const da=1.0, db=0.55, dc=0.35;
+
+    for(let y=1;y<GH-1;y++){
+      for(let x=1;x<GW-1;x++){
+        const i=idx(x,y);
+        const a=A[i], b=B[i], c=C[i];
+        const la=lap(A,x,y), lb=lap(B,x,y), lc=lap(C,x,y);
+        const ab2=a*b*b;
+
+        let na=a+(da*la-ab2+feed*(1-a))*dt;
+        let nb=b+(db*lb+ab2-(kill+feed)*b)*dt;
+        let nc=c+(dc*lc+0.10*ab2-0.06*c)*dt;
+
+        const s=PPU.smooth;
+        A2[i]=clamp((1-s)*na+s*a,0,1);
+        B2[i]=clamp((1-s)*nb+s*b,0,1);
+        C2[i]=clamp((1-s)*nc+s*c,0,1);
+      }
+    }
+    [A,A2]=[A2,A]; [B,B2]=[B2,B]; [C,C2]=[C2,C];
+
+    ImgTrain.tick += dt;
+
+    for(let i=0;i<A.length;i++){
+      const a=A[i], b=B[i], c=C[i];
+      const hue=0.5+0.35*Math.sin(0.9*PPU.poles[0]+0.4*PPU.poles[3]);
+      const r=clamp(255*(0.10+0.90*a),0,255);
+      const g=clamp(255*(0.08+0.85*(hue*b+(1-hue)*c)),0,255);
+      const bb=clamp(255*(0.06+0.90*(0.6*c+0.4*b)),0,255);
+      const p=i*4;
+      px[p]=r|0; px[p+1]=g|0; px[p+2]=bb|0; px[p+3]=255;
+    }
+    offCtx.putImageData(img,0,0);
+  }
+
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    const dw=GW*scale, dh=GH*scale;
+    const x0=(W-dw)/2, y0=(H-dh)/2;
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(off,x0,y0,dw,dh);
+
+    ctx.save();
+    const grd=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.15, W/2,H/2, Math.max(W,H)*0.65);
+    grd.addColorStop(0,"rgba(0,0,0,0)");
+    grd.addColorStop(1,"rgba(0,0,0,0.45)");
+    ctx.fillStyle=grd;
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+
+    renderHUD();
+  }
+
+  function loop(){
+    const t=now();
+    let dt=(t-lastT)/1000;
+    lastT=t;
+    dt=clamp(dt,0.001,0.030);
+    const steps=(dt>0.020)?2:1;
+    for(let s=0;s<steps;s++) step(dt/steps);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  (async ()=>{
+    logLine("boot: ready");
+    loadCustomStreams();
+    logLine("tip: tap HOME → VERIFY ALL first; then MATH → AUTO TRAIN");
+    logLine("IMG → AUTO IMG TRAIN streams Commons images + injects stats into field");
+    if(IDB_OK){
+      const chunks=await idbLoad(120);
+      for(const t of chunks) ingestText(t);
+      logLine("idb: loaded cached chunks=" + chunks.length);
+    }else{
+      logLine("idb: OFF (file://). host on https/localhost for persistence.");
+    }
+    requestAnimationFrame(loop);
+  })();
+
+})();
+</script>
+</body>
+</html>
