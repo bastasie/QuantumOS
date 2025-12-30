@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <title>Calculator Atom — GIFLife PyLab (AQC•PPU)</title>
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; touch-action:none; }
+    #screen { position:fixed; inset:0; width:100vw; height:100vh; display:block; image-rendering: pixelated; }
+    /* Hidden helpers (no visible HTML UI) */
+    #editorOverlay {
+      position:fixed; left:-9999px; top:-9999px;
+      width:1px; height:1px; opacity:0;
+      font-size:16px; /* prevent mobile auto-zoom */
+    }
+    #filePick, #audioPick { position:fixed; left:-9999px; top:-9999px; }
+  </style>
+</head>
+<body>
+  <canvas id="screen"></canvas>
+  <textarea id="editorOverlay" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  <input id="filePick" type="file" multiple />
+  <input id="audioPick" type="file" accept="audio/*" />
+<script>
+(() => {
+  "use strict";
+
+  // =======================
+  // Canvas scaling / anti-zoom
+  // =======================
+  const canvas = document.getElementById("screen");
+  const ctx = canvas.getContext("2d", { alpha:false, desynchronized:true });
+  const editorOverlay = document.getElementById("editorOverlay");
+  const filePick = document.getElementById("filePick");
+  const audioPick = document.getElementById("audioPick");
+
+  let W=0,H=0,DPR=1;
+  function resize(){
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    W = Math.floor(window.innerWidth);
+    H = Math.floor(window.innerHeight);
+    canvas.width = Math.floor(W*DPR);
+    canvas.height = Math.floor(H*DPR);
+    canvas.style.width = W+"px";
+    canvas.style.height = H+"px";
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener("resize", resize, {passive:true});
+  resize();
+
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const now=()=>performance.now();
+  const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+  const rand=(a=0,b=1)=>a+(b-a)*Math.random();
+
+  // =======================
+  // GIFLife field (reaction diffusion) = our "screen"
+  // =======================
+  let GW=0, GH=0, scale=1;
+  let A,B,C,A2,B2,C2, off, offCtx, img, px;
+  function initGrid(){
+    const target = clamp(Math.floor(Math.min(W,H)*0.85), 170, 300);
+    GW = target;
+    GH = clamp(Math.floor(target*(H/W)), 170, 520);
+    A=new Float32Array(GW*GH); B=new Float32Array(GW*GH); C=new Float32Array(GW*GH);
+    A2=new Float32Array(GW*GH); B2=new Float32Array(GW*GH); C2=new Float32Array(GW*GH);
+    for(let i=0;i<A.length;i++){ A[i]=0.12+0.1*Math.random(); B[i]=0.08+0.1*Math.random(); C[i]=0.05+0.1*Math.random(); }
+    off=document.createElement("canvas"); off.width=GW; off.height=GH;
+    offCtx=off.getContext("2d",{alpha:false});
+    img=offCtx.createImageData(GW,GH); px=img.data;
+    scale = Math.min(W/GW, H/GH);
+    for(let k=0;k<10;k++) splash(Math.random()*W, Math.random()*H, 16+Math.random()*45, 1.0);
+  }
+  initGrid();
+  function idx(x,y){ return y*GW+x; }
+  function lap(arr,x,y){
+    const i=idx(x,y), v=arr[i];
+    return (arr[i-1]+arr[i+1]+arr[i-GW]+arr[i+GW]-4*v);
+  }
+  function splash(xpx,ypx,rpx,str){
+    const gx=Math.floor((xpx/W)*GW), gy=Math.floor((ypx/H)*GH);
+    const rr=Math.max(2,Math.floor((rpx/Math.min(W,H))*Math.min(GW,GH)));
+    const r2=rr*rr;
+    for(let y=gy-rr;y<=gy+rr;y++){
+      if(y<1||y>=GH-1) continue;
+      for(let x=gx-rr;x<=gx+rr;x++){
+        if(x<1||x>=GW-1) continue;
+        const dx=x-gx, dy=y-gy;
+        const d2=dx*dx+dy*dy;
+        if(d2>r2) continue;
+        const bump=str*(1-d2/r2);
+        const i=idx(x,y);
+        A[i]=clamp(A[i]+0.35*bump,0,1);
+        B[i]=clamp(B[i]+0.25*bump,0,1);
+        C[i]=clamp(C[i]+0.15*bump,0,1);
+      }
+    }
+  }
+
+  // =======================
+  // PPU + AQC poles (controls "load" & smoothing)
+  // =======================
+  const PPU = {
+    coherence: 0.78,
+    smooth: 0.22,
+    entropy: 0.12,
+    temperature: 0.90,
+    poles: new Float32Array(12),
+    vels:  new Float32Array(12),
+    load: 0.0
+  };
+  function ppuStep(dt){
+    for(let i=0;i<PPU.poles.length;i++){
+      const w = 1.4 + 0.13*i;
+      const damp = 0.08 + 0.004*i;
+      const drive = 0.10*Math.sin(0.001*now()*(1+i*0.07));
+      const acc = -w*w*PPU.poles[i] - damp*PPU.vels[i] + drive - 0.20*(1-PPU.coherence)*PPU.poles[i];
+      PPU.vels[i] += acc*dt;
+      PPU.poles[i] += PPU.vels[i]*dt;
+    }
+    let E=0;
+    for(let i=0;i<PPU.poles.length;i++) E += PPU.poles[i]*PPU.poles[i] + 0.18*PPU.vels[i]*PPU.vels[i];
+    PPU.entropy = clamp(E/PPU.poles.length,0,1);
+    const targetSmooth = 0.10 + 0.60*(1-PPU.coherence);
+    PPU.smooth = clamp(PPU.smooth + (targetSmooth-PPU.smooth)*0.05, 0.05, 0.85);
+    const targetTemp = 0.55 + 0.75*(PPU.coherence);
+    PPU.temperature = clamp(PPU.temperature + (targetTemp-PPU.temperature)*0.03, 0.2, 1.6);
+    // load decays
+    PPU.load = clamp(PPU.load*0.94, 0, 1);
+  }
+
+  // =======================
+  // Text cache burn into bottom strip (visual "memory")
+  // =======================
+  let cachePtr = 0;
+  function burnCache(text){
+    if(!text) return;
+    const enc=new TextEncoder();
+    const bytes=enc.encode(text.slice(0, 8192));
+    const stripH=Math.max(18, Math.floor(GH*0.06));
+    const y0=GH-stripH;
+    for(let i=0;i<bytes.length;i++){
+      const b=bytes[i];
+      const x=(cachePtr+i)%GW;
+      const y=y0 + (((cachePtr+i)/GW)|0)%stripH;
+      const j=idx(x,y);
+      A[j]=(b&0xFF)/255;
+      B[j]=((b*37)&0xFF)/255;
+      C[j]=((b*91)&0xFF)/255;
+    }
+    cachePtr=(cachePtr+bytes.length)%(GW*stripH);
+  }
+
+  // =======================
+  // Minimal 5x7 font for HUD labels
+  // =======================
+  const FONT = {
+    "A":[14,17,17,31,17,17,17],"B":[30,17,30,17,17,17,30],"C":[15,16,16,16,16,16,15],
+    "D":[30,17,17,17,17,17,30],"E":[31,16,30,16,16,16,31],"F":[31,16,30,16,16,16,16],
+    "G":[15,16,16,23,17,17,15],"H":[17,17,31,17,17,17,17],"I":[31,4,4,4,4,4,31],
+    "J":[7,2,2,2,2,18,12],"K":[17,18,20,24,20,18,17],"L":[16,16,16,16,16,16,31],
+    "M":[17,27,21,17,17,17,17],"N":[17,25,21,19,17,17,17],"O":[14,17,17,17,17,17,14],
+    "P":[30,17,17,30,16,16,16],"Q":[14,17,17,17,21,18,13],"R":[30,17,17,30,20,18,17],
+    "S":[15,16,16,14,1,1,30],"T":[31,4,4,4,4,4,4],"U":[17,17,17,17,17,17,14],
+    "V":[17,17,17,17,10,10,4],"W":[17,17,17,21,21,27,17],"X":[17,10,4,4,4,10,17],
+    "Y":[17,10,4,4,4,4,4],"Z":[31,1,2,4,8,16,31],
+    "0":[14,19,21,25,17,17,14],"1":[4,12,4,4,4,4,14],"2":[14,17,1,2,4,8,31],
+    "3":[30,1,1,14,1,1,30],"4":[2,6,10,18,31,2,2],"5":[31,16,30,1,1,17,14],
+    "6":[6,8,16,30,17,17,14],"7":[31,1,2,4,8,8,8],"8":[14,17,17,14,17,17,14],
+    "9":[14,17,17,15,1,2,28],
+    ".":[0,0,0,0,0,6,6],":":[0,6,6,0,6,6,0],"-":[0,0,0,31,0,0,0],"/":[1,2,4,8,16,0,0],
+    " ":[0,0,0,0,0,0,0], "?":[14,17,1,2,4,0,4], "!":[4,4,4,4,4,0,4], "_":[0,0,0,0,0,0,31]
+  };
+  function drawText5(x,y,text,s=2,rgba="rgba(255,255,255,0.92)"){
+    ctx.save(); ctx.fillStyle=rgba;
+    let cx=x, cy=y;
+    const up=(text||"").toUpperCase();
+    for(let k=0;k<up.length;k++){
+      const ch=up[k];
+      if(ch=="\n"){ cy += 9*s; cx = x; continue; }
+      const g=FONT[ch]||FONT["?"];
+      for(let r=0;r<7;r++){
+        const bits=g[r]||0;
+        for(let c=0;c<5;c++){
+          if(bits & (1<<(4-c))) ctx.fillRect(cx+c*s, cy+r*s, s, s);
+        }
+      }
+      cx += 6*s;
+    }
+    ctx.restore();
+  }
+  function roundRect(x,y,w,h,r,fill=true,stroke=true){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+  const rect=(x,y,w,h)=>({x,y,w,h});
+  const hit=(r,px,py)=>(px>=r.x && px<=r.x+r.w && py>=r.y && py<=r.y+r.h);
+
+  // =======================
+  // Pyodide kernel (Python in browser)
+  // =======================
+  const Kernel = {
+    ready:false,
+    loading:false,
+    status:"idle",
+    pyodide:null,
+    pkgsLoaded:false,
+    lastOut:"",
+    lastErr:"",
+    lastFig:null, // Image object URL (matplotlib)
+    globalsReady:false,
+    queue:[]
+  };
+
+  const PYODIDE_VERSION = "0.29.0";
+  const PYODIDE_INDEX = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+  function logLine(s){ UI.log.push("[" + new Date().toLocaleTimeString() + "] " + s); if(UI.log.length>14) UI.log.shift(); }
+
+  async function ensureKernel(){
+    if(Kernel.ready || Kernel.loading) return;
+    Kernel.loading=true; Kernel.status="loading pyodide";
+    logLine("kernel: loading pyodide v"+PYODIDE_VERSION);
+    try{
+      // load pyodide.js
+      await new Promise((resolve,reject)=>{
+        const sc=document.createElement("script");
+        sc.src = PYODIDE_INDEX + "pyodide.js";
+        sc.async=true;
+        sc.onload=()=>resolve();
+        sc.onerror=()=>reject(new Error("Failed to load pyodide.js"));
+        document.head.appendChild(sc);
+      });
+      Kernel.status="initializing";
+      Kernel.pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX });
+      Kernel.status="loading base packages";
+      // core scientific stack (best-effort)
+      await Kernel.pyodide.loadPackage(["micropip","numpy","sympy","matplotlib","pandas"]);
+      Kernel.pkgsLoaded=true;
+      Kernel.status="priming globals";
+      await Kernel.pyodide.runPythonAsync(`
+import sys, io, math
+import numpy as np
+import sympy as sp
+import pandas as pd
+import matplotlib
+matplotlib.use("AGG")
+import matplotlib.pyplot as plt
+
+__calc_atom_globals__ = globals()
+def __calc_atom_exec__(code: str):
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    _stdout, _stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = buf_out, buf_err
+    try:
+        # Exec as a cell
+        exec(code, __calc_atom_globals__, __calc_atom_globals__)
+        # If a figure exists, return it
+        figs = list(map(plt.figure, plt.get_fignums()))
+        img_bytes = None
+        if figs:
+            import base64
+            import tempfile, os
+            f = figs[-1]
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp.close()
+            f.savefig(tmp.name, dpi=140, bbox_inches="tight")
+            with open(tmp.name, "rb") as fh:
+                img_bytes = base64.b64encode(fh.read()).decode("ascii")
+            os.unlink(tmp.name)
+        return {"ok": True, "out": buf_out.getvalue(), "err": buf_err.getvalue(), "img_b64": img_bytes}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "out": buf_out.getvalue(), "err": buf_err.getvalue()+traceback.format_exc(), "img_b64": None}
+    finally:
+        sys.stdout, sys.stderr = _stdout, _stderr
+`);
+      Kernel.globalsReady=true;
+      Kernel.ready=true;
+      Kernel.status="ready";
+      logLine("kernel: ready (numpy, sympy, matplotlib, pandas)");
+      splash(W*0.5,H*0.35,80,1.0);
+    }catch(e){
+      Kernel.status="error";
+      logLine("kernel: ERROR " + (e?.message || e));
+    }finally{
+      Kernel.loading=false;
+    }
+  }
+
+  async function runPythonCell(code){
+    await ensureKernel();
+    if(!Kernel.ready) return;
+    Kernel.status="running";
+    PPU.load = 1.0;
+    splash(rand(0,W), rand(0,H*0.6), 36, 0.9);
+    try{
+      const res = await Kernel.pyodide.runPythonAsync(`__calc_atom_exec__(${JSON.stringify(code)})`);
+      Kernel.lastOut = (res.out || "");
+      Kernel.lastErr = (res.err || "");
+      if(res.img_b64){
+        const b = atob(res.img_b64);
+        const arr = new Uint8Array(b.length);
+        for(let i=0;i<b.length;i++) arr[i]=b.charCodeAt(i);
+        const blob = new Blob([arr], {type:"image/png"});
+        if(Kernel.lastFig) URL.revokeObjectURL(Kernel.lastFig);
+        Kernel.lastFig = URL.createObjectURL(blob);
+      }
+      burnCache((Kernel.lastOut||"") + "\n" + (Kernel.lastErr||""));
+      // tweak coherence based on whether error exists
+      PPU.coherence = clamp(PPU.coherence + (Kernel.lastErr ? -0.05 : 0.03), 0, 1);
+      logLine("run: " + (Kernel.lastErr ? "ERR" : "OK") + " (" + code.length + " chars)");
+    }catch(e){
+      Kernel.lastErr = (e?.message || String(e));
+      logLine("run: ERROR " + Kernel.lastErr);
+    }finally{
+      Kernel.status="ready";
+      PPU.load = clamp(PPU.load*0.6, 0, 1);
+    }
+  }
+
+  async function installPackage(pkg){
+    await ensureKernel();
+    if(!Kernel.ready) return;
+    Kernel.status="installing";
+    PPU.load = 1.0;
+    try{
+      logLine("pip: installing " + pkg);
+      await Kernel.pyodide.runPythonAsync(`
+import micropip
+await micropip.install(${JSON.stringify(pkg)})
+`);
+      logLine("pip: installed " + pkg);
+      splash(W*0.5,H*0.4,70,1.0);
+    }catch(e){
+      logLine("pip: FAIL " + (e?.message || e));
+    }finally{
+      Kernel.status="ready";
+      PPU.load = 0.2;
+    }
+  }
+
+  async function resetKernel(){
+    // simplest: reload page or create new kernel? We'll do a soft reset by clearing outputs and figures.
+    Kernel.lastOut=""; Kernel.lastErr="";
+    if(Kernel.lastFig){ URL.revokeObjectURL(Kernel.lastFig); Kernel.lastFig=null; }
+    PPU.coherence = 0.78;
+    splash(W*0.5,H*0.4,90,1.0);
+    logLine("kernel: soft reset (outputs cleared)");
+  }
+
+  // =======================
+  // File handling into Pyodide FS
+  // =======================
+  const Files = { list: [], lastAction:"" };
+
+  async function pickFiles(){
+    return new Promise((resolve)=>{
+      filePick.value="";
+      filePick.onchange = async () => {
+        const fs = filePick.files;
+        if(!fs || !fs.length) return resolve(false);
+        await ensureKernel();
+        if(!Kernel.ready) return resolve(false);
+        for(const f of fs){
+          const buf = new Uint8Array(await f.arrayBuffer());
+          Kernel.pyodide.FS.writeFile("/" + f.name, buf);
+          Files.lastAction = "wrote /" + f.name + " (" + buf.byteLength + " bytes)";
+          logLine("fs: " + Files.lastAction);
+        }
+        refreshFileList();
+        resolve(true);
+      };
+      filePick.click();
+    });
+  }
+
+  function refreshFileList(){
+    if(!Kernel.ready) return;
+    try{
+      const entries = Kernel.pyodide.FS.readdir("/").filter(x=>x!=="." && x!=="..");
+      Files.list = entries.slice(0, 40);
+    }catch(e){
+      Files.list=[];
+    }
+  }
+
+  // =======================
+  // Audio converter (WAV export using Web Audio)
+  // =======================
+  const Audio = {
+    fileName:"",
+    status:"idle",
+    wavUrl:null,
+    seconds:0,
+    sr:0,
+    channels:0,
+    waveform:[]
+  };
+
+  function encodeWAV(audioBuffer){
+    // 16-bit PCM WAV
+    const numChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const length = audioBuffer.length;
+    const bytesPerSample = 2;
+    const blockAlign = numChannels * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + length * blockAlign);
+    const view = new DataView(buffer);
+
+    function writeString(offset, str){
+      for(let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i));
+    }
+    let offset=0;
+    writeString(offset, "RIFF"); offset+=4;
+    view.setUint32(offset, 36 + length*blockAlign, true); offset+=4;
+    writeString(offset, "WAVE"); offset+=4;
+    writeString(offset, "fmt "); offset+=4;
+    view.setUint32(offset, 16, true); offset+=4;
+    view.setUint16(offset, 1, true); offset+=2; // PCM
+    view.setUint16(offset, numChannels, true); offset+=2;
+    view.setUint32(offset, sampleRate, true); offset+=4;
+    view.setUint32(offset, sampleRate*blockAlign, true); offset+=4;
+    view.setUint16(offset, blockAlign, true); offset+=2;
+    view.setUint16(offset, 16, true); offset+=2; // bits
+    writeString(offset, "data"); offset+=4;
+    view.setUint32(offset, length*blockAlign, true); offset+=4;
+
+    // interleave
+    const chData = [];
+    for(let c=0;c<numChannels;c++) chData.push(audioBuffer.getChannelData(c));
+    let pos=44;
+    for(let i=0;i<length;i++){
+      for(let c=0;c<numChannels;c++){
+        let s = chData[c][i];
+        s = Math.max(-1, Math.min(1, s));
+        view.setInt16(pos, s < 0 ? s*0x8000 : s*0x7FFF, true);
+        pos += 2;
+      }
+    }
+    return new Blob([view], { type:"audio/wav" });
+  }
+
+  async function pickAudioAndConvert(){
+    return new Promise((resolve)=>{
+      audioPick.value="";
+      audioPick.onchange = async () => {
+        const f = audioPick.files && audioPick.files[0];
+        if(!f) return resolve(false);
+        Audio.status="decoding";
+        Audio.fileName=f.name;
+        logLine("audio: decoding " + f.name);
+        try{
+          const ac = new (window.AudioContext || window.webkitAudioContext)();
+          const buf = await f.arrayBuffer();
+          const decoded = await ac.decodeAudioData(buf.slice(0));
+          Audio.seconds = decoded.duration;
+          Audio.sr = decoded.sampleRate;
+          Audio.channels = decoded.numberOfChannels;
+
+          // quick waveform downsample
+          const N = 220;
+          const data = decoded.getChannelData(0);
+          const step = Math.max(1, Math.floor(data.length/N));
+          Audio.waveform = [];
+          for(let i=0;i<N;i++){
+            const p = i*step;
+            let mx=0;
+            for(let k=0;k<step && p+k<data.length;k++) mx = Math.max(mx, Math.abs(data[p+k]));
+            Audio.waveform.push(mx);
+          }
+
+          Audio.status="encoding wav";
+          const wavBlob = encodeWAV(decoded);
+          if(Audio.wavUrl) URL.revokeObjectURL(Audio.wavUrl);
+          Audio.wavUrl = URL.createObjectURL(wavBlob);
+          Audio.status="ready";
+          logLine("audio: WAV ready (" + Math.round(wavBlob.size/1024) + " KB)");
+          burnCache("AUDIO WAV " + f.name + " sr=" + Audio.sr + " ch=" + Audio.channels);
+          splash(W*0.5,H*0.45,70,1.0);
+          resolve(true);
+        }catch(e){
+          Audio.status="error";
+          logLine("audio: FAIL " + (e?.message || e));
+          resolve(false);
+        }
+      };
+      audioPick.click();
+    });
+  }
+
+  function downloadBlobUrl(url, name){
+    if(!url) return;
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // =======================
+  // UI model (GIF-screen hit areas)
+  // =======================
+  const UI = {
+    tab:"HOME",
+    code:`# Calculator Atom — quick start\nimport sympy as sp\nx=sp.Symbol('x')\nexpr=sp.integrate(sp.sin(x)**2, (x,0,sp.pi))\nprint('Integral =', expr)\n\n# Plot something\nimport numpy as np\nimport matplotlib.pyplot as plt\nxs=np.linspace(0, 6.28, 400)\nplt.plot(xs, np.sin(xs))\nplt.title('sin(x)')\nplt.grid(True)\n`,
+    log: [],
+    kbOpen:false,
+    installing:"",
+    pkgSuggested:"sympy, numpy, matplotlib, pandas already loaded",
+  };
+
+  function layout(){
+    const pad=10, tabH=44;
+    const w=(W-2*pad)/5;
+    const tabs=[
+      {name:"HOME", r:rect(pad+w*0, H-tabH, w, tabH)},
+      {name:"PY", r:rect(pad+w*1, H-tabH, w, tabH)},
+      {name:"FILES", r:rect(pad+w*2, H-tabH, w, tabH)},
+      {name:"AUDIO", r:rect(pad+w*3, H-tabH, w, tabH)},
+      {name:"SET", r:rect(pad+w*4, H-tabH, w, tabH)},
+    ];
+    return {pad, tabH, tabs};
+  }
+
+  function button(x,y,w,h,label,active=false,small=false){
+    ctx.save();
+    ctx.fillStyle = active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.07)";
+    ctx.strokeStyle = active ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.16)";
+    ctx.lineWidth=1;
+    roundRect(x,y,w,h,10,true,true);
+    drawText5(x+10, y+(small?12:10), label, small?1:2, "rgba(255,255,255,0.92)");
+    ctx.restore();
+  }
+
+  function drawWrapped(text, x, y, maxW, lineH, color="rgba(245,245,255,0.90)", maxLines=20){
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textBaseline = "top";
+    const words=(text||"").replace(/\r/g,"").split(/\s+/);
+    let line="", yy=y, lines=0;
+    for(const w of words){
+      const test=line? (line+" "+w) : w;
+      if(ctx.measureText(test).width > maxW){
+        ctx.fillText(line, x, yy);
+        yy += lineH;
+        line=w; lines++;
+        if(lines>=maxLines) break;
+      }else line=test;
+    }
+    if(line && lines<maxLines) ctx.fillText(line, x, yy);
+    ctx.restore();
+  }
+
+  // Overlay editor using hidden textarea but displayed on GIF screen
+  function openEditor(){
+    editorOverlay.value = UI.code;
+    editorOverlay.style.left = "0px";
+    editorOverlay.style.top = "0px";
+    editorOverlay.style.width = "1px";
+    editorOverlay.style.height = "1px";
+    editorOverlay.style.opacity = "0";
+    editorOverlay.focus({preventScroll:true});
+    UI.kbOpen=true;
+    logLine("editor: open (type, then tap DONE)");
+  }
+  function closeEditor(apply=true){
+    if(apply) UI.code = editorOverlay.value;
+    editorOverlay.blur();
+    editorOverlay.style.left="-9999px";
+    editorOverlay.style.top="-9999px";
+    UI.kbOpen=false;
+    logLine("editor: " + (apply? "applied":"closed"));
+  }
+
+  // =======================
+  // Pointer interactions
+  // =======================
+  let down=false;
+  canvas.addEventListener("pointerdown",(e)=>{
+    down=true;
+    const x=e.clientX, y=e.clientY;
+    handleTap(x,y);
+    splash(x,y,22,0.85);
+    e.preventDefault();
+  },{passive:false});
+  canvas.addEventListener("pointermove",(e)=>{
+    if(!down) return;
+    splash(e.clientX,e.clientY,16,0.45);
+  },{passive:true});
+  window.addEventListener("pointerup",()=>down=false,{passive:true});
+
+  async function handleTap(x,y){
+    const L=layout();
+    for(const t of L.tabs){
+      if(hit(t.r,x,y)){
+        UI.tab=t.name;
+        if(UI.tab!=="PY") UI.kbOpen=false;
+        logLine("tab: " + t.name);
+        if(UI.tab==="FILES" && Kernel.ready) refreshFileList();
+        return;
+      }
+    }
+
+    // HOME
+    if(UI.tab==="HOME"){
+      const bLoad = rect(12, 72, 170, 36);
+      const bEx1  = rect(12, 116, 170, 36);
+      const bEx2  = rect(190, 116, 170, 36);
+      if(hit(bLoad,x,y)) return ensureKernel();
+      if(hit(bEx1,x,y)){ UI.code = "import sympy as sp\nx=sp.Symbol('x')\nprint(sp.factor(x**4-1))\n"; UI.tab="PY"; return; }
+      if(hit(bEx2,x,y)){ UI.code = "import sympy as sp\nn=sp.Symbol('n', integer=True, positive=True)\nprint(sp.summation(1/n**2, (n,1, sp.oo)))\n"; UI.tab="PY"; return; }
+    }
+
+    // PY
+    if(UI.tab==="PY"){
+      const bEdit = rect(12, 72, 120, 36);
+      const bDone = rect(140, 72, 120, 36);
+      const bRun  = rect(268, 72, 120, 36);
+      const bClear= rect(12, 116, 120, 36);
+      const bReset= rect(140, 116, 120, 36);
+      if(hit(bEdit,x,y)) return openEditor();
+      if(hit(bDone,x,y)) return closeEditor(true);
+      if(hit(bRun,x,y)) return runPythonCell(UI.code);
+      if(hit(bClear,x,y)){ Kernel.lastOut=""; Kernel.lastErr=""; if(Kernel.lastFig){URL.revokeObjectURL(Kernel.lastFig); Kernel.lastFig=null;} logLine("output: cleared"); return; }
+      if(hit(bReset,x,y)) return resetKernel();
+      // Tap code panel to edit via prompt (fallback)
+      const codePanel = rect(12, 160, W-24, Math.min(180, H*0.26));
+      if(hit(codePanel,x,y)){
+        const v = window.prompt("Edit Python cell:", UI.code);
+        if(typeof v==="string") UI.code=v;
+        return;
+      }
+    }
+
+    // FILES
+    if(UI.tab==="FILES"){
+      const bKernel = rect(12,72,140,36);
+      const bPick   = rect(160,72,120,36);
+      const bRefresh= rect(288,72,100,36);
+      if(hit(bKernel,x,y)) return ensureKernel();
+      if(hit(bPick,x,y)) return pickFiles();
+      if(hit(bRefresh,x,y)) { refreshFileList(); logLine("fs: refreshed"); return; }
+
+      // Tap a file to show preview in python
+      const listY=120;
+      for(let i=0;i<Files.list.length;i++){
+        const r = rect(12, listY + i*28, W-24, 24);
+        if(hit(r,x,y)){
+          const fn = Files.list[i];
+          UI.code = `# Preview file: ${fn}\nwith open('/${fn}','rb') as f:\n    data=f.read(2000)\nprint(data[:400])\nprint('bytes:', len(data))\n`;
+          UI.tab="PY";
+          return;
+        }
+      }
+    }
+
+    // AUDIO
+    if(UI.tab==="AUDIO"){
+      const bPick = rect(12,72,140,36);
+      const bDl   = rect(160,72,140,36);
+      const bPulse= rect(308,72,80,36);
+      if(hit(bPick,x,y)) return pickAudioAndConvert();
+      if(hit(bDl,x,y)) return downloadBlobUrl(Audio.wavUrl, (Audio.fileName||"audio") + ".wav");
+      if(hit(bPulse,x,y)){
+        for(let i=0;i<PPU.poles.length;i++) PPU.vels[i] += rand(-0.9,0.9);
+        logLine("ppu: pulse");
+        return;
+      }
+    }
+
+    // SET
+    if(UI.tab==="SET"){
+      const bKernel = rect(12,72,140,36);
+      const bInstall= rect(160,72,140,36);
+      const bCoUp   = rect(308,72,80,36);
+      const bCoDn   = rect(308,116,80,36);
+      const pkgBox  = rect(12, 160, W-24, 52);
+      if(hit(bKernel,x,y)) return ensureKernel();
+      if(hit(bInstall,x,y)){
+        const pkg = window.prompt("micropip.install('...') package name:", "sympy");
+        if(typeof pkg==="string" && pkg.trim()) return installPackage(pkg.trim());
+        return;
+      }
+      if(hit(bCoUp,x,y)){ PPU.coherence = clamp(PPU.coherence+0.06,0,1); logLine("ppu: coherence+"+PPU.coherence.toFixed(2)); return; }
+      if(hit(bCoDn,x,y)){ PPU.coherence = clamp(PPU.coherence-0.06,0,1); logLine("ppu: coherence-"+PPU.coherence.toFixed(2)); return; }
+      if(hit(pkgBox,x,y)){
+        const v = window.prompt("Notes:", UI.pkgSuggested);
+        if(typeof v==="string") UI.pkgSuggested=v;
+        return;
+      }
+    }
+  }
+
+  // =======================
+  // Simulation loop
+  // =======================
+  let lastT=now();
+  function step(dt){
+    ppuStep(dt);
+
+    // RD parameters modulated by "AQC/PPU"
+    const feed = 0.032 + 0.018*(1-PPU.coherence) + 0.010*PPU.load;
+    const kill = 0.053 + 0.020*(PPU.entropy) + 0.010*(1-PPU.coherence);
+    const da=1.0, db=0.55, dc=0.35;
+
+    for(let y=1;y<GH-1;y++){
+      for(let x=1;x<GW-1;x++){
+        const i=idx(x,y);
+        const a=A[i], b=B[i], c=C[i];
+        const la=lap(A,x,y), lb=lap(B,x,y), lc=lap(C,x,y);
+        const ab2=a*b*b;
+        let na = a + (da*la - ab2 + feed*(1-a))*dt;
+        let nb = b + (db*lb + ab2 - (kill+feed)*b)*dt;
+        let nc = c + (dc*lc + 0.10*ab2 - 0.06*c)*dt;
+        const s=PPU.smooth;
+        A2[i]=clamp((1-s)*na + s*a,0,1);
+        B2[i]=clamp((1-s)*nb + s*b,0,1);
+        C2[i]=clamp((1-s)*nc + s*c,0,1);
+      }
+    }
+    [A,A2]=[A2,A]; [B,B2]=[B2,B]; [C,C2]=[C2,C];
+
+    // render pixels
+    const hue = 0.5 + 0.35*Math.sin(0.9*PPU.poles[0] + 0.4*PPU.poles[3]);
+    for(let i=0;i<A.length;i++){
+      const a=A[i], b=B[i], c=C[i];
+      const r=clamp(255*(0.10+0.90*a),0,255);
+      const g=clamp(255*(0.08+0.85*(hue*b+(1-hue)*c)),0,255);
+      const bb=clamp(255*(0.06+0.90*(0.6*c+0.4*b)),0,255);
+      const p=i*4;
+      px[p]=r|0; px[p+1]=g|0; px[p+2]=bb|0; px[p+3]=255;
+    }
+    offCtx.putImageData(img,0,0);
+  }
+
+  function drawTabs(){
+    const L=layout();
+    // strips
+    ctx.save();
+    ctx.globalAlpha=0.92;
+    ctx.fillStyle="rgba(0,0,0,0.34)"; ctx.fillRect(0,0,W,54);
+    ctx.fillStyle="rgba(0,0,0,0.28)"; ctx.fillRect(0,H-44,W,44);
+    ctx.restore();
+
+    drawText5(12,10,"CALCULATOR ATOM",2,"rgba(255,255,255,0.94)");
+    drawText5(12,30,"GIFLIFE PYLAB  |  AQC-PPU KERNEL",1,"rgba(210,220,255,0.82)");
+
+    for(const t of L.tabs){
+      const active = (UI.tab===t.name);
+      ctx.save();
+      ctx.fillStyle= active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)";
+      ctx.strokeStyle= active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.12)";
+      ctx.lineWidth=1;
+      roundRect(t.r.x+2,t.r.y+6,t.r.w-4,t.r.h-12,10,true,true);
+      drawText5(t.r.x+12, t.r.y+16, t.name, 2, active ? "rgba(255,255,255,0.95)" : "rgba(200,210,255,0.70)");
+      ctx.restore();
+    }
+  }
+
+  function drawPanel(x,y,w,h,title){
+    ctx.save();
+    ctx.fillStyle="rgba(0,0,0,0.30)";
+    ctx.strokeStyle="rgba(255,255,255,0.14)";
+    ctx.lineWidth=1;
+    roundRect(x,y,w,h,12,true,true);
+    drawText5(x+10,y+10,title,1,"rgba(200,210,255,0.80)");
+    ctx.restore();
+  }
+
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    const dw=GW*scale, dh=GH*scale;
+    const x0=(W-dw)/2, y0=(H-dh)/2;
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(off, x0,y0,dw,dh);
+
+    drawTabs();
+
+    // HUD status
+    drawText5(W-220, 12, "KERNEL:"+Kernel.status, 1, "rgba(230,240,255,0.85)");
+    drawText5(W-220, 28, "COH:"+PPU.coherence.toFixed(2)+" LOAD:"+PPU.load.toFixed(2), 1, "rgba(210,220,255,0.78)");
+
+    if(UI.tab==="HOME"){
+      drawPanel(12,62,W-24,160,"HOME");
+      button(12,72,170,36,"LOAD KERNEL", Kernel.ready || Kernel.loading, false);
+      button(12,116,170,36,"EXAMPLE 1", false, false);
+      button(190,116,170,36,"EXAMPLE 2", false, false);
+      drawWrapped("Tap LOAD KERNEL to boot Pyodide. Then go to PY to run a cell. The GIFLife field is the live PPU/AQC substrate; it also visually caches text outputs in the bottom strip.", 22, 156, W-44, 18, "rgba(245,245,255,0.90)", 6);
+      drawPanel(12,230,W-24,H-230-56,"LOG");
+      let yy=248;
+      for(const line of UI.log.slice(-12)){
+        drawWrapped(line, 22, yy, W-44, 14, "rgba(235,235,255,0.88)", 1);
+        yy += 16;
+      }
+    }
+
+    if(UI.tab==="PY"){
+      button(12,72,120,36,"EDIT", UI.kbOpen, false);
+      button(140,72,120,36,"DONE", false, false);
+      button(268,72,120,36,"RUN", false, false);
+      button(12,116,120,36,"CLEAR", false, false);
+      button(140,116,120,36,"RESET", false, false);
+
+      // code panel
+      const codeH=Math.min(180, Math.floor(H*0.26));
+      drawPanel(12,160,W-24,codeH,"PY CELL (tap panel to edit via prompt)");
+      drawWrapped(UI.code, 22, 182, W-44, 16, "rgba(245,245,255,0.90)", 8);
+
+      // output panel
+      const outY=160+codeH+12;
+      drawPanel(12,outY,W-24,H-outY-56,"OUTPUT");
+      const outText = (Kernel.lastOut||"").slice(0, 2500) + (Kernel.lastErr? "\n\n[stderr]\n" + Kernel.lastErr.slice(0, 1600) : "");
+      drawWrapped(outText || "(no output yet)", 22, outY+24, W-44, 16, Kernel.lastErr? "rgba(255,210,210,0.92)" : "rgba(245,245,255,0.90)", 18);
+
+      // matplotlib preview
+      if(Kernel.lastFig){
+        const im = new Image();
+        im.onload = () => {
+          const pw = 170, ph = 120;
+          ctx.save();
+          ctx.globalAlpha=0.95;
+          ctx.drawImage(im, W-pw-18, outY+24, pw, ph);
+          ctx.restore();
+        };
+        im.src = Kernel.lastFig;
+      }
+    }
+
+    if(UI.tab==="FILES"){
+      button(12,72,140,36,"LOAD KERNEL", Kernel.ready||Kernel.loading, true);
+      button(160,72,120,36,"PICK FILES", false, true);
+      button(288,72,100,36,"REFRESH", false, true);
+      drawPanel(12,120,W-24,H-120-56,"FILES (tap a file to make a preview cell)");
+      let yy=142;
+      if(!Kernel.ready){
+        drawWrapped("Kernel not ready. Tap LOAD KERNEL first.", 22, yy, W-44, 16, "rgba(245,245,255,0.90)", 2);
+      } else if(!Files.list.length){
+        drawWrapped("No files yet. Tap PICK FILES.", 22, yy, W-44, 16, "rgba(245,245,255,0.90)", 2);
+      } else {
+        for(let i=0;i<Files.list.length && yy < H-70;i++){
+          const fn=Files.list[i];
+          ctx.save();
+          ctx.fillStyle="rgba(255,255,255,0.07)";
+          ctx.strokeStyle="rgba(255,255,255,0.10)";
+          roundRect(12, yy, W-24, 24, 8, true, true);
+          drawText5(22, yy+7, fn.slice(0, 42), 1, "rgba(245,245,255,0.90)");
+          ctx.restore();
+          yy += 28;
+        }
+      }
+    }
+
+    if(UI.tab==="AUDIO"){
+      button(12,72,140,36,"PICK AUDIO", false, true);
+      button(160,72,140,36,"DOWNLOAD", !!Audio.wavUrl, true);
+      button(308,72,80,36,"PULSE", false, true);
+      drawPanel(12,120,W-24,150,"AUDIO CONVERTER (WAV)");
+      drawText5(22,144,"STATUS:"+Audio.status,1,"rgba(245,245,255,0.90)");
+      drawText5(22,162,"FILE:"+ (Audio.fileName||"-"),1,"rgba(210,220,255,0.82)");
+      if(Audio.sr) drawText5(22,180,`SR:${Audio.sr}  CH:${Audio.channels}  SEC:${Audio.seconds.toFixed(2)}`,1,"rgba(210,220,255,0.82)");
+
+      // waveform
+      if(Audio.waveform && Audio.waveform.length){
+        const x=22, y=205, w=W-44, h=50;
+        ctx.save();
+        ctx.fillStyle="rgba(0,0,0,0.20)";
+        ctx.strokeStyle="rgba(255,255,255,0.12)";
+        roundRect(x,y,w,h,10,true,true);
+        ctx.fillStyle="rgba(255,255,255,0.20)";
+        const N=Audio.waveform.length;
+        for(let i=0;i<N;i++){
+          const v=Audio.waveform[i];
+          const bx = x + (i/N)*w;
+          const bh = v*h;
+          ctx.fillRect(bx, y + (h-bh)/2, Math.max(1, w/N), bh);
+        }
+        ctx.restore();
+      }
+
+      drawPanel(12,290,W-24,H-290-56,"NOTES");
+      drawWrapped("This converter decodes audio in-browser and exports 16-bit PCM WAV. For MP3/OPUS you'd need heavy wasm encoders; WAV is reliable and fast on phones.", 22, 312, W-44, 18, "rgba(245,245,255,0.90)", 7);
+    }
+
+    if(UI.tab==="SET"){
+      button(12,72,140,36,"LOAD KERNEL", Kernel.ready||Kernel.loading, true);
+      button(160,72,140,36,"INSTALL", false, true);
+      button(308,72,80,36,"COH+", false, true);
+      button(308,116,80,36,"COH-", false, true);
+      drawPanel(12,160,W-24,52,"LIBS / NOTES (tap to edit)");
+      drawWrapped(UI.pkgSuggested, 22, 184, W-44, 16, "rgba(245,245,255,0.90)", 2);
+
+      drawPanel(12,224,W-24,140,"AQC/PPU POLE BANK");
+      const x0=22, y0=252, ww=W-44, hh=90;
+      const n=PPU.poles.length;
+      for(let i=0;i<n;i++){
+        const bx=x0 + i*(ww/n);
+        const bw=ww/n - 2;
+        const mid=y0+hh/2;
+        const amp=clamp(PPU.poles[i],-1,1);
+        const hbar=amp*(hh*0.45);
+        ctx.save();
+        ctx.fillStyle="rgba(255,255,255,0.12)";
+        ctx.fillRect(bx, mid, bw, -hbar);
+        ctx.strokeStyle="rgba(255,255,255,0.10)";
+        ctx.strokeRect(bx, y0, bw, hh);
+        ctx.restore();
+      }
+
+      drawPanel(12,378,W-24,H-378-56,"TIPS");
+      drawWrapped("• Use PY tab: tap RUN.\n• EDIT opens the mobile keyboard via a hidden overlay.\n• FILES writes into Pyodide FS at /filename.\n• AUDIO converts to WAV.\n• Install adds pure-python wheels via micropip (not all binary pkgs will work).", 22, 400, W-44, 18, "rgba(245,245,255,0.90)", 9);
+    }
+
+    // vignette
+    ctx.save();
+    const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.15, W/2,H/2, Math.max(W,H)*0.70);
+    g.addColorStop(0,"rgba(0,0,0,0)");
+    g.addColorStop(1,"rgba(0,0,0,0.46)");
+    ctx.fillStyle=g;
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+  }
+
+  function loop(){
+    const t=now();
+    let dt=(t-lastT)/1000; lastT=t;
+    dt=clamp(dt,0.001,0.030);
+    const steps=(dt>0.020)?2:1;
+    for(let k=0;k<steps;k++) step(dt/steps);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Boot notes
+  logLine("ready: Calculator Atom (GIFLife PyLab)");
+  logLine("tap HOME->LOAD KERNEL to boot python");
+  logLine("Pyodide CDN: " + PYODIDE_INDEX);
+})();
+</script>
+</body>
+</html>
