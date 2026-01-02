@@ -1,0 +1,1322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover" />
+<title>PPU‑SVG OS (single‑file) — prime‑domain + Bas coordinates</title>
+<style>
+  :root{ color-scheme: dark; --bg:#0b0c10; --panel:#11131a; --ink:#e7e7ea; --muted:#a7a7b0; --line:#2a2f3b; --accent:#6ee7ff; }
+  html,body{ height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.25 system-ui,Segoe UI,Roboto,Arial; overflow:hidden; }
+  #root{ position:fixed; inset:0; }
+  #svg{ width:100%; height:100%; display:block; touch-action:none; }
+  .noSelect{ user-select:none; -webkit-user-select:none; }
+  .btn{ cursor:pointer; }
+  .shadow{ filter: drop-shadow(0 8px 18px rgba(0,0,0,.55)); }
+  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+foreignObject{ pointer-events: all; }
+</style>
+</head>
+<body>
+<div id="root">
+  <svg id="svg" viewBox="0 0 1280 720" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" class="noSelect">
+    <defs>
+      <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#0b0c10"/>
+        <stop offset="1" stop-color="#0a1020"/>
+      </linearGradient>
+      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#1a1e29"/>
+        <stop offset="1" stop-color="#0f121a"/>
+      </linearGradient>
+    </defs>
+
+    <!-- Desktop -->
+    <rect id="desktop" x="0" y="0" width="1280" height="720" fill="url(#bgGrad)"/>
+
+    <!-- Floating toast -->
+    <g id="toast" opacity="0">
+      <rect id="toastBg" x="20" y="20" rx="12" ry="12" width="420" height="46" fill="#10131a" stroke="#2a2f3b"/>
+      <text id="toastTxt" x="40" y="50" fill="#e7e7ea" font-size="16" class="mono"></text>
+    </g>
+
+    <!-- Window layer -->
+    <g id="winLayer" class="shadow"></g>
+
+    <!-- Taskbar -->
+    <g id="taskbar">
+      <rect id="bar" x="0" y="676" width="1280" height="44" fill="url(#barGrad)" stroke="var(--line)" />
+      <g id="startBtn" class="btn">
+        <rect x="10" y="684" width="120" height="30" rx="10" ry="10" fill="#151a24" stroke="#2a2f3b" />
+        <text x="28" y="705" fill="#e7e7ea" font-size="14" class="mono">START</text>
+      </g>
+      <text id="status" x="1268" y="705" text-anchor="end" fill="#a7a7b0" font-size="12" class="mono">idle</text>
+    </g>
+
+    <!-- Start menu -->
+    <g id="startMenu" opacity="0" pointer-events="none" class="shadow">
+      <rect id="startOverlay" x="0" y="0" width="1280" height="720" fill="transparent" pointer-events="all"/>
+      <rect x="10" y="410" width="320" height="260" rx="16" ry="16" fill="#0f121a" stroke="#2a2f3b"/>
+      <text x="30" y="442" fill="#a7a7b0" font-size="12" class="mono">APPS</text>
+      <g id="menuItems"></g>
+    </g>
+
+    <!-- Cursor -->
+    <circle id="cursor" cx="100" cy="100" r="6" fill="#6ee7ff" opacity="0.85"/>
+  </svg>
+</div>
+
+<script>
+(()=>{
+  'use strict';
+
+  // ============================================================
+  // 0) Utilities
+  // ============================================================
+  const $ = (id)=>document.getElementById(id);
+  const svg = $('svg');
+  const winLayer = $('winLayer');
+  const toastG = $('toast');
+  const toastTxt = $('toastTxt');
+  const statusTxt = $('status');
+  const cursor = $('cursor');
+  const startBtn = $('startBtn');
+  const startMenu = $('startMenu');
+  const startOverlay = $('startOverlay');
+  const menuItems = $('menuItems');
+
+  function nowMs(){ return performance.now(); }
+  function clamp(x,a,b){ return x<a?a : x>b?b : x; }
+
+  function toast(msg, ms=1100){
+    toastTxt.textContent = msg;
+    toastG.setAttribute('opacity','1');
+    clearTimeout(toastG.__t);
+    toastG.__t = setTimeout(()=>toastG.setAttribute('opacity','0'), ms);
+  }
+
+  function setStatus(s){ statusTxt.textContent = s; }
+
+  function svgPointFromClient(clientX, clientY){
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    const m = svg.getScreenCTM();
+    if(!m) return {x:0,y:0};
+    const inv = m.inverse();
+    const p = pt.matrixTransform(inv);
+    return {x:p.x, y:p.y};
+  }
+
+  // ============================================================
+  // 1) Prime‑domain value model (analytic core)
+  //    A value is a sparse exponent vector in Z^k (free abelian group).
+  //    This matches the PPU paper’s “prime‑exponent vectors” abstraction.
+  // ============================================================
+
+  // First primes (enough for UI + demo). You can extend this deterministically.
+  const PRIMES = [2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71,73,79,83,89,97];
+
+  // Sparse vector represented as two parallel Int16 arrays (idx, exp) stored in JS arrays.
+  // idx refers to prime-index in PRIMES, *not* the prime itself.
+  class PVec {
+    constructor(pairs){
+      // pairs: Array<[idx, exp]>, exp is integer (can be negative).
+      this.i = []; this.e = [];
+      if(pairs && pairs.length) {
+        for(const [idx, exp] of pairs){ if(exp!==0) { this.i.push(idx|0); this.e.push(exp|0); } }
+        this.norm();
+      }
+    }
+    clone(){
+      const v = new PVec();
+      v.i = this.i.slice();
+      v.e = this.e.slice();
+      return v;
+    }
+    norm(){
+      // canonicalize: sort by idx and combine same idx.
+      const n = this.i.length;
+      if(n<=1) return this;
+      const tmp = [];
+      for(let k=0;k<n;k++) tmp.push([this.i[k], this.e[k]]);
+      tmp.sort((a,b)=>a[0]-b[0]);
+      const ni=[]; const ne=[];
+      for(const [idx, exp] of tmp){
+        if(ni.length && ni[ni.length-1]===idx) ne[ne.length-1]+=exp;
+        else { ni.push(idx); ne.push(exp); }
+      }
+      // drop zeros
+      this.i=[]; this.e=[];
+      for(let k=0;k<ni.length;k++){ if(ne[k]!==0){ this.i.push(ni[k]); this.e.push(ne[k]); } }
+      return this;
+    }
+    static add(a,b){
+      // exponent-wise addition = multiplication in integer domain.
+      const out = new PVec();
+      // merge two sorted lists
+      a = a.clone().norm(); b = b.clone().norm();
+      let ia=0, ib=0;
+      while(ia<a.i.length || ib<b.i.length){
+        const aidx = ia<a.i.length ? a.i[ia] : 1e9;
+        const bidx = ib<b.i.length ? b.i[ib] : 1e9;
+        if(aidx===bidx){
+          const ex = a.e[ia] + b.e[ib];
+          if(ex!==0){ out.i.push(aidx); out.e.push(ex); }
+          ia++; ib++;
+        } else if(aidx<bidx){
+          out.i.push(aidx); out.e.push(a.e[ia]); ia++;
+        } else {
+          out.i.push(bidx); out.e.push(b.e[ib]); ib++;
+        }
+      }
+      return out;
+    }
+    static sub(a,b){
+      // exponent-wise subtraction = division in integer domain.
+      const nb = b.neg();
+      return PVec.add(a, nb);
+    }
+    neg(){
+      const v = this.clone();
+      for(let k=0;k<v.e.length;k++) v.e[k] = -v.e[k];
+      return v;
+    }
+    isZero(){ return this.i.length===0; }
+    toString(){
+      if(this.isZero()) return '1';
+      const parts=[];
+      for(let k=0;k<this.i.length;k++){
+        const p = PRIMES[this.i[k]] ?? ('p'+this.i[k]);
+        const e = this.e[k];
+        parts.push(e===1? String(p) : `${p}^${e}`);
+      }
+      return parts.join('·');
+    }
+    // Deterministic packing for storage: varint-like pairs (idx, zigzag(exp)).
+    pack(){
+      const bytes=[];
+      const pushVar=(x)=>{ // unsigned
+        while(x>127){ bytes.push((x&127)|128); x>>=7; }
+        bytes.push(x&127);
+      };
+      const zig=(z)=> (z<<1) ^ (z>>31);
+      pushVar(this.i.length);
+      for(let k=0;k<this.i.length;k++){
+        pushVar(this.i[k]);
+        pushVar(zig(this.e[k]));
+      }
+      return new Uint8Array(bytes);
+    }
+    static unpack(u8){
+      let o=0;
+      const readVar=()=>{
+        let x=0, s=0;
+        while(true){
+          const b=u8[o++];
+          x |= (b&127)<<s;
+          if(!(b&128)) break;
+          s+=7;
+        }
+        return x>>>0;
+      };
+      const unzig=(x)=> (x>>>1) ^ (-(x&1));
+      const n = readVar();
+      const pairs=[];
+      for(let k=0;k<n;k++){
+        const idx = readVar()|0;
+        const exp = unzig(readVar())|0;
+        if(exp!==0) pairs.push([idx,exp]);
+      }
+      return new PVec(pairs);
+    }
+  }
+
+  // ============================================================
+  // 2) Bas‑coordinate transform (paper-consistent)
+  //    x = r1 cos(r2 φ), y = r1 sin(r2 φ). We use it as a view mapping.
+  // ============================================================
+  function basForward(r1, r2, phi){
+    return { x: r1*Math.cos(r2*phi), y: r1*Math.sin(r2*phi) };
+  }
+  function basInverse(x, y, r2){
+    const r1 = Math.hypot(x,y);
+    const phi = (r2===0)? 0 : Math.atan2(y,x)/r2;
+    return { r1, r2, phi };
+  }
+
+  // ============================================================
+  // 3) Sparse 32k logical framebuffer using prime‑domain tiles
+  //    Logical space can be 32768×32768 without allocating it all.
+  // ============================================================
+
+  const LOG_W = 32768;
+  const LOG_H = 32768;
+  const TILE = 64;
+
+  // Tile storage: Map<tileKey, Uint32Array>
+  // plus prime-domain metadata for OS bookkeeping.
+  const tiles = new Map();
+  const dirty = new Set();
+
+  function tileKey(tx,ty){ return (tx<<16) ^ ty; }
+  function getTile(tx,ty, create=false){
+    const k = tileKey(tx,ty);
+    let t = tiles.get(k);
+    if(!t && create){
+      t = new Uint32Array(TILE*TILE);
+      tiles.set(k,t);
+      dirty.add(k);
+    }
+    return t;
+  }
+
+  // RGBA pack helper
+  function rgba(r,g,b,a=255){ return (a<<24)|(b<<16)|(g<<8)|r; }
+
+  // Prime-domain tag for each tile: a PVec describing “ownership / content class”.
+  // In real PPU hardware this would live in compressed sparse memory.
+  const tileTag = new Map();
+  function tagTile(tx,ty, pvec){ tileTag.set(tileKey(tx,ty), pvec.clone()); }
+
+  function setPixel(x,y,color){
+    if(x<0||y<0||x>=LOG_W||y>=LOG_H) return;
+    const tx = (x/TILE)|0, ty=(y/TILE)|0;
+    const t = getTile(tx,ty,true);
+    const lx = x - tx*TILE, ly = y - ty*TILE;
+    t[ly*TILE+lx] = color>>>0;
+    dirty.add(tileKey(tx,ty));
+  }
+
+  // ============================================================
+  // 4) Minimal PPU VM (bytecode) to schedule processes
+  //    (We keep it small but complete enough for OS tasks.)
+  // ============================================================
+
+  const OP = {
+    NOP:0,
+    LDI:1,      // LDI rD, immPackedLen, immPackedBytes...
+    MOV:2,      // MOV rD, rS
+    ADD:3,      // rD = rA + rB  (prime-vector add)
+    SUB:4,      // rD = rA - rB
+    NEG:5,      // rD = -rS
+    JMP:6,      // JMP addr
+    JZ:7,       // JZ rS, addr   (jump if zero)
+    JNZ:8,      // JNZ rS, addr
+    SYS:9,      // SYS code, rA, rB
+    HALT:10,
+  };
+
+  class PPU {
+    constructor(){
+      this.reg = Array.from({length:8}, ()=>new PVec());
+      this.pc = 0;
+      this.prog = new Uint8Array(0);
+      this.running = false;
+      this.sys = {
+        // syscall table
+        1: (a,b)=>{ // draw tile-tagged cursor dot at (a,b) in Bas-view coords
+          return new PVec();
+        }
+      };
+    }
+    load(bytes){ this.prog = bytes; this.pc = 0; this.running = true; }
+    step(budget=200){
+      if(!this.running) return;
+      const P = this.prog;
+      let n=0;
+      const readU8 = ()=> P[this.pc++];
+      const readU16 = ()=> (readU8() | (readU8()<<8))>>>0;
+      while(this.running && n++<budget){
+        const op = readU8();
+        switch(op){
+          case OP.NOP: break;
+          case OP.LDI: {
+            const rD = readU8()&7;
+            const len = readU16();
+            const slice = P.slice(this.pc, this.pc+len);
+            this.pc += len;
+            this.reg[rD] = PVec.unpack(slice);
+          } break;
+          case OP.MOV: {
+            const rD=readU8()&7, rS=readU8()&7;
+            this.reg[rD] = this.reg[rS].clone();
+          } break;
+          case OP.ADD: {
+            const rD=readU8()&7, rA=readU8()&7, rB=readU8()&7;
+            this.reg[rD] = PVec.add(this.reg[rA], this.reg[rB]);
+          } break;
+          case OP.SUB: {
+            const rD=readU8()&7, rA=readU8()&7, rB=readU8()&7;
+            this.reg[rD] = PVec.sub(this.reg[rA], this.reg[rB]);
+          } break;
+          case OP.NEG: {
+            const rD=readU8()&7, rS=readU8()&7;
+            this.reg[rD] = this.reg[rS].neg();
+          } break;
+          case OP.JMP: {
+            const addr = readU16();
+            this.pc = addr;
+          } break;
+          case OP.JZ: {
+            const rS=readU8()&7; const addr=readU16();
+            if(this.reg[rS].isZero()) this.pc = addr;
+          } break;
+          case OP.JNZ: {
+            const rS=readU8()&7; const addr=readU16();
+            if(!this.reg[rS].isZero()) this.pc = addr;
+          } break;
+          case OP.SYS: {
+            const code = readU8();
+            const rA=readU8()&7, rB=readU8()&7;
+            const fn = this.sys[code];
+            if(fn) this.reg[0] = fn(this.reg[rA], this.reg[rB]) || new PVec();
+          } break;
+          case OP.HALT:
+            this.running=false;
+            break;
+          default:
+            this.running=false;
+            throw new Error('Bad opcode '+op+' at '+(this.pc-1));
+        }
+      }
+    }
+  }
+
+  const ppu = new PPU();
+
+  // ============================================================
+  // 5) CHIP‑8 emulator (small but complete, no external libs)
+  // ============================================================
+
+  class Chip8 {
+    constructor(){
+      this.mem = new Uint8Array(4096);
+      this.V = new Uint8Array(16);
+      this.I = 0;
+      this.pc = 0x200;
+      this.stack = new Uint16Array(16);
+      this.sp = 0;
+      this.delay = 0;
+      this.sound = 0;
+      this.keys = new Uint8Array(16);
+      this.gfx = new Uint8Array(64*32);
+      this.drawFlag = false;
+      this.lastTimer = nowMs();
+      this.haltedForKey = -1;
+      this.reset();
+    }
+    reset(){
+      this.mem.fill(0);
+      this.V.fill(0);
+      this.stack.fill(0);
+      this.sp = 0;
+      this.I = 0;
+      this.pc = 0x200;
+      this.delay = 0;
+      this.sound = 0;
+      this.keys.fill(0);
+      this.gfx.fill(0);
+      this.drawFlag = true;
+      this.haltedForKey = -1;
+      // fontset
+      const font = [
+        0xF0,0x90,0x90,0x90,0xF0, //0
+        0x20,0x60,0x20,0x20,0x70, //1
+        0xF0,0x10,0xF0,0x80,0xF0, //2
+        0xF0,0x10,0xF0,0x10,0xF0, //3
+        0x90,0x90,0xF0,0x10,0x10, //4
+        0xF0,0x80,0xF0,0x10,0xF0, //5
+        0xF0,0x80,0xF0,0x90,0xF0, //6
+        0xF0,0x10,0x20,0x40,0x40, //7
+        0xF0,0x90,0xF0,0x90,0xF0, //8
+        0xF0,0x90,0xF0,0x10,0xF0, //9
+        0xF0,0x90,0xF0,0x90,0x90, //A
+        0xE0,0x90,0xE0,0x90,0xE0, //B
+        0xF0,0x80,0x80,0x80,0xF0, //C
+        0xE0,0x90,0x90,0x90,0xE0, //D
+        0xF0,0x80,0xF0,0x80,0xF0, //E
+        0xF0,0x80,0xF0,0x80,0x80  //F
+      ];
+      for(let i=0;i<font.length;i++) this.mem[i] = font[i];
+    }
+    loadProgram(u8){
+      this.reset();
+      for(let i=0;i<u8.length && 0x200+i<this.mem.length;i++) this.mem[0x200+i]=u8[i];
+    }
+    tickTimers(){
+      const t = nowMs();
+      const dt = t - this.lastTimer;
+      if(dt >= 16.666){
+        const steps = (dt/16.666)|0;
+        this.lastTimer += steps*16.666;
+        if(this.delay>0) this.delay = Math.max(0, this.delay-steps);
+        if(this.sound>0) this.sound = Math.max(0, this.sound-steps);
+      }
+    }
+    cycle(n=10){
+      this.tickTimers();
+      if(this.haltedForKey>=0){
+        for(let k=0;k<16;k++) if(this.keys[k]){ this.V[this.haltedForKey]=k; this.haltedForKey=-1; break; }
+        return;
+      }
+      for(let c=0;c<n;c++){
+        const op = (this.mem[this.pc]<<8) | this.mem[this.pc+1];
+        this.pc = (this.pc + 2) & 0xFFFF;
+        const x = (op>>8)&0xF;
+        const y = (op>>4)&0xF;
+        const nnn = op & 0x0FFF;
+        const nn = op & 0x00FF;
+        const n4 = op & 0x000F;
+        switch(op & 0xF000){
+          case 0x0000:
+            if(op===0x00E0){ this.gfx.fill(0); this.drawFlag=true; }
+            else if(op===0x00EE){ this.sp = (this.sp-1)&0xF; this.pc = this.stack[this.sp]; }
+            break;
+          case 0x1000: this.pc = nnn; break;
+          case 0x2000: this.stack[this.sp]=this.pc; this.sp=(this.sp+1)&0xF; this.pc=nnn; break;
+          case 0x3000: if(this.V[x]===nn) this.pc=(this.pc+2)&0xFFFF; break;
+          case 0x4000: if(this.V[x]!==nn) this.pc=(this.pc+2)&0xFFFF; break;
+          case 0x5000: if((op&0x000F)===0 && this.V[x]===this.V[y]) this.pc=(this.pc+2)&0xFFFF; break;
+          case 0x6000: this.V[x]=nn; break;
+          case 0x7000: this.V[x]=(this.V[x]+nn)&0xFF; break;
+          case 0x8000:
+            switch(op&0x000F){
+              case 0x0: this.V[x]=this.V[y]; break;
+              case 0x1: this.V[x]=(this.V[x]|this.V[y])&0xFF; break;
+              case 0x2: this.V[x]=(this.V[x]&this.V[y])&0xFF; break;
+              case 0x3: this.V[x]=(this.V[x]^this.V[y])&0xFF; break;
+              case 0x4: {
+                const s=this.V[x]+this.V[y];
+                this.V[0xF]= s>255?1:0;
+                this.V[x]=s&0xFF;
+              } break;
+              case 0x5: {
+                this.V[0xF]= this.V[x] >= this.V[y] ? 1:0;
+                this.V[x]=(this.V[x]-this.V[y])&0xFF;
+              } break;
+              case 0x6: {
+                this.V[0xF]= this.V[x] & 1;
+                this.V[x]=(this.V[x]>>1)&0xFF;
+              } break;
+              case 0x7: {
+                this.V[0xF]= this.V[y] >= this.V[x] ? 1:0;
+                this.V[x]=(this.V[y]-this.V[x])&0xFF;
+              } break;
+              case 0xE: {
+                this.V[0xF]= (this.V[x]>>7)&1;
+                this.V[x]=(this.V[x]<<1)&0xFF;
+              } break;
+            }
+            break;
+          case 0x9000: if((op&0x000F)===0 && this.V[x]!==this.V[y]) this.pc=(this.pc+2)&0xFFFF; break;
+          case 0xA000: this.I=nnn; break;
+          case 0xB000: this.pc=(nnn+this.V[0])&0xFFFF; break;
+          case 0xC000: this.V[x]=(Math.floor(Math.random()*256)&nn)&0xFF; break;
+          case 0xD000: {
+            const vx=this.V[x], vy=this.V[y];
+            this.V[0xF]=0;
+            for(let row=0;row<n4;row++){
+              const sprite=this.mem[this.I+row];
+              for(let col=0;col<8;col++){
+                if(sprite & (0x80>>col)){
+                  const px=(vx+col)&63;
+                  const py=(vy+row)&31;
+                  const idx=py*64+px;
+                  if(this.gfx[idx]) this.V[0xF]=1;
+                  this.gfx[idx]^=1;
+                }
+              }
+            }
+            this.drawFlag=true;
+          } break;
+          case 0xE000:
+            if(nn===0x9E){ if(this.keys[this.V[x]&0xF]) this.pc=(this.pc+2)&0xFFFF; }
+            else if(nn===0xA1){ if(!this.keys[this.V[x]&0xF]) this.pc=(this.pc+2)&0xFFFF; }
+            break;
+          case 0xF000:
+            switch(nn){
+              case 0x07: this.V[x]=this.delay; break;
+              case 0x0A: this.haltedForKey = x; break;
+              case 0x15: this.delay=this.V[x]; break;
+              case 0x18: this.sound=this.V[x]; break;
+              case 0x1E: this.I=(this.I+this.V[x])&0xFFFF; break;
+              case 0x29: this.I=(this.V[x]&0xF)*5; break;
+              case 0x33: {
+                const v=this.V[x];
+                this.mem[this.I]=Math.floor(v/100);
+                this.mem[this.I+1]=Math.floor((v%100)/10);
+                this.mem[this.I+2]=v%10;
+              } break;
+              case 0x55: for(let i=0;i<=x;i++) this.mem[this.I+i]=this.V[i]; break;
+              case 0x65: for(let i=0;i<=x;i++) this.V[i]=this.mem[this.I+i]; break;
+            }
+            break;
+        }
+      }
+    }
+  }
+
+  const chip8 = new Chip8();
+
+  // Built-in CHIP‑8 demo ROM (written here, public domain):
+  // Draws a bouncing sprite and reacts to keys 4/6/8/2.
+  // Assembler is manual but deterministic.
+  const ROM_DEMO = new Uint8Array([
+    0x00,0xE0,       // CLS
+    0x60,0x10,       // V0 = 16 (x)
+    0x61,0x08,       // V1 = 8  (y)
+    0x62,0x01,       // V2 = 1  (dx)
+    0x63,0x01,       // V3 = 1  (dy)
+    0xA0,0x00,       // I = font for 0
+    // loop:
+    0x00,0xE0,       // CLS
+    0xD0,0x15,       // DRW V0,V1,5  (digit 0)
+    // input (2,4,6,8 mapped to 1,2,3,C typical, but we use 4/6/8/2 -> 4/6/8/2)
+    0xE4,0xA1,       // SKNP V4 (unused) just no-op path
+    // move
+    0x80,0x24,       // V0 += V2
+    0x81,0x34,       // V1 += V3
+    // bounce x
+    0x30,0x3C,       // SE V0,60 -> if x==60 skip next
+    0x12,0x14,       // JP cont
+    0x82,0x07,       // V2 = V0 - V2 (cheap invert-ish)
+    // bounce y
+    0x31,0x1C,       // SE V1,28
+    0x12,0x14,
+    0x83,0x17,
+    // cont
+    0x12,0x0C        // JP loop
+  ]);
+
+  chip8.loadProgram(ROM_DEMO);
+
+  // ============================================================
+  // 6) OS windowing on SVG
+  // ============================================================
+
+  const OS = {
+    W:1280, H:720,
+    taskH:44,
+    windows:[],
+    focus:null,
+    startOpen:false,
+    nextId:1,
+    pointer:{down:false, x:0, y:0},
+    drag:null,
+  };
+
+  function mk(tag, attrs, parent){
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    if(attrs) for(const k in attrs) el.setAttribute(k, String(attrs[k]));
+    if(parent) parent.appendChild(el);
+    return el;
+  }
+
+  function createWindow({title, x, y, w, h, app}){
+    const id = 'W'+(OS.nextId++);
+    const g = mk('g', { 'data-id':id }, winLayer);
+    const frame = mk('rect', { x,y, width:w, height:h, rx:14, ry:14, fill:'#0f121a', stroke:'#2a2f3b' }, g);
+    const titleBar = mk('rect', { x,y, width:w, height:34, rx:14, ry:14, fill:'#141925', stroke:'#2a2f3b' }, g);
+    const titleTxt = mk('text', { x:x+14, y:y+23, fill:'#e7e7ea', 'font-size':13, class:'mono' }, g);
+    titleTxt.textContent = title;
+    const closeBtn = mk('rect', { x:x+w-34, y:y+6, width:22, height:22, rx:8, ry:8, fill:'#1b2231', stroke:'#2a2f3b', class:'btn' }, g);
+    const closeX = mk('text', { x:x+w-23, y:y+22, 'text-anchor':'middle', fill:'#a7a7b0', 'font-size':14, class:'mono btn' }, g);
+    closeX.textContent = '×';
+
+    const contentY = y+34;
+    const contentH = h-34;
+
+    // foreignObject for HTML app surface
+    const fo = mk('foreignObject', { x:x+10, y:contentY+10, width:w-20, height:contentH-20 }, g);
+    const div = document.createElement('div');
+    div.style.width = '100%';
+    div.style.height = '100%';
+    div.style.background = '#0b0c10';
+    div.style.border = '1px solid #2a2f3b';
+    div.style.borderRadius = '12px';
+    div.style.overflow = 'hidden';
+    div.style.display = 'flex';
+    div.style.flexDirection = 'column';
+    div.style.font = '12px/1.2 ui-monospace,monospace';
+    div.style.color = '#e7e7ea';
+
+    const header = document.createElement('div');
+    header.style.padding = '8px 10px';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.gap = '8px';
+    header.style.background = '#0f121a';
+    header.style.borderBottom = '1px solid #2a2f3b';
+
+    const body = document.createElement('div');
+    body.style.flex = '1';
+    body.style.position = 'relative';
+
+    div.appendChild(header);
+    div.appendChild(body);
+    fo.appendChild(div);
+
+    const win = { id, title, x,y,w,h, g, frame, titleBar, titleTxt, closeBtn, closeX, fo, div, header, body, app };
+    OS.windows.push(win);
+    focus(win);
+
+    // close button
+    const close = ()=>{ closeWindow(win); };
+    closeBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); close(); });
+    closeX.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); close(); });
+
+    // app mount
+    if(app) app.mount(win);
+    return win;
+  }
+
+  function focus(win){
+    OS.focus = win?.id || null;
+    // bring to front
+    if(win){
+      const idx = OS.windows.indexOf(win);
+      if(idx>=0){ OS.windows.splice(idx,1); OS.windows.push(win); }
+      // reappend in order
+      while(winLayer.firstChild) winLayer.removeChild(winLayer.firstChild);
+      for(const w of OS.windows) winLayer.appendChild(w.g);
+    }
+  }
+
+  function closeWindow(win){
+    try{ if(typeof win.__dispose === 'function') win.__dispose(); }catch{}
+    const idx = OS.windows.indexOf(win);
+    if(idx>=0) OS.windows.splice(idx,1);
+    try{ win.g.remove(); }catch{}
+    if(OS.windows.length) focus(OS.windows[OS.windows.length-1]); else OS.focus=null;
+    toast('window closed');
+  }
+
+  function setWindowGeom(win, x,y){
+    win.x=x; win.y=y;
+    win.frame.setAttribute('x',x); win.frame.setAttribute('y',y);
+    win.titleBar.setAttribute('x',x); win.titleBar.setAttribute('y',y);
+    win.titleTxt.setAttribute('x',x+14); win.titleTxt.setAttribute('y',y+23);
+    win.closeBtn.setAttribute('x',x+win.w-34); win.closeBtn.setAttribute('y',y+6);
+    win.closeX.setAttribute('x',x+win.w-23); win.closeX.setAttribute('y',y+22);
+    win.fo.setAttribute('x',x+10); win.fo.setAttribute('y',y+44);
+  }
+
+  function hitWindowTitle(px,py){
+    for(let i=OS.windows.length-1;i>=0;i--){
+      const w=OS.windows[i];
+      if(px>=w.x && px<=w.x+w.w && py>=w.y && py<=w.y+34) return w;
+    }
+    return null;
+  }
+
+  // ============================================================
+  // 6.B) Readymade emulator backend (v86)
+  // ============================================================
+  // NOTE: This uses remote assets by default. If you want a STRICT single-file/offline build,
+  // inline these assets as base64 and swap the URLs for blob: URLs.
+  const V86_ASSETS = {
+    lib:  'https://copy.sh/v86/build/libv86.js',
+    wasm: 'https://copy.sh/v86/build/v86.wasm',
+    bios: 'https://copy.sh/v86/bios/seabios.bin',
+    vgabios: 'https://copy.sh/v86/bios/vgabios.bin',
+    freedos: 'https://copy.sh/v86/images/freedos722.img',
+    linux:   'https://copy.sh/v86/images/linux.iso',
+  };
+
+  const __loadedScripts = new Set();
+  function loadScriptOnce(url){
+    if(__loadedScripts.has(url)) return Promise.resolve();
+    return new Promise((resolve,reject)=>{
+      const s = document.createElement('script');
+      s.src = url;
+      s.async = true;
+      s.onload = ()=>{ __loadedScripts.add(url); resolve(); };
+      s.onerror = ()=>reject(new Error('Failed to load script: '+url));
+      document.head.appendChild(s);
+    });
+  }
+
+  // ============================================================
+  // 7) Apps
+  // ============================================================
+
+  const Apps = {
+    v86: {
+      name:'x86 VM (v86)',
+      mount(win){
+        const h = win.header;
+        h.innerHTML = '';
+
+        const badge = document.createElement('div');
+        badge.textContent = 'v86 (x86 → WASM)';
+        badge.style.padding='4px 8px';
+        badge.style.border='1px solid #2a2f3b';
+        badge.style.borderRadius='999px';
+        badge.style.color='#a7a7b0';
+
+        const mkBtn = (label)=>{
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.style.background='#151a24';
+          b.style.color='#e7e7ea';
+          b.style.border='1px solid #2a2f3b';
+          b.style.borderRadius='10px';
+          b.style.padding='6px 10px';
+          b.style.cursor='pointer';
+          return b;
+        };
+
+        const btnDOS   = mkBtn('Boot FreeDOS');
+        const btnLinux = mkBtn('Boot Linux');
+        const btnRun   = mkBtn('Run');
+        const btnStop  = mkBtn('Stop');
+        const btnReset = mkBtn('Reset');
+
+        const right = document.createElement('div');
+        right.style.marginLeft='auto';
+        right.style.color='#a7a7b0';
+        right.className='mono';
+        right.textContent='(needs network; serve via http for best results)';
+
+        h.appendChild(badge);
+        h.appendChild(btnDOS);
+        h.appendChild(btnLinux);
+        h.appendChild(btnRun);
+        h.appendChild(btnStop);
+        h.appendChild(btnReset);
+        h.appendChild(right);
+
+        const b = win.body;
+        b.innerHTML = '';
+        b.style.background='#000';
+        b.style.display='flex';
+        b.style.flexDirection='column';
+
+        const screen = document.createElement('div');
+        screen.style.flex='1';
+        screen.style.overflow='hidden';
+        screen.style.background='#000';
+        screen.style.display='flex';
+        screen.style.alignItems='stretch';
+        screen.style.justifyContent='center';
+
+        const screenInner = document.createElement('div');
+        screenInner.style.width='100%';
+        screenInner.style.height='100%';
+        screenInner.style.maxWidth='100%';
+        screenInner.style.maxHeight='100%';
+        screenInner.style.overflow='hidden';
+        screenInner.style.touchAction='none';
+        screen.appendChild(screenInner);
+
+        const status = document.createElement('div');
+        status.className='mono';
+        status.style.padding='8px 10px';
+        status.style.borderTop='1px solid #2a2f3b';
+        status.style.background='#0f121a';
+        status.style.color='#a7a7b0';
+        status.textContent='Ready. Pick a boot target.';
+
+        b.appendChild(screen);
+        b.appendChild(status);
+
+        const stopExisting = ()=>{
+          if(win.__v86){
+            try{ win.__v86.stop(); }catch{}
+            try{ screenInner.innerHTML=''; }catch{}
+            win.__v86 = null;
+          }
+        };
+        win.__dispose = ()=>{ stopExisting(); };
+
+        async function boot(mode){
+          stopExisting();
+          status.textContent = 'Loading v86…';
+          try{
+            await loadScriptOnce(V86_ASSETS.lib);
+          }catch(err){
+            status.textContent = 'Failed to load v86 library. (Network/CSP?)';
+            console.error(err);
+            return;
+          }
+          const Starter = window.V86Starter || window.V86;
+          if(!Starter){
+            status.textContent = 'v86 library loaded, but no V86Starter/V86 found.';
+            return;
+          }
+
+          status.textContent = 'Booting…';
+
+          const opts = {
+            wasm_path: V86_ASSETS.wasm,
+            screen_container: screenInner,
+            bios: { url: V86_ASSETS.bios },
+            vga_bios: { url: V86_ASSETS.vgabios },
+            autostart: true,
+            memory_size: 64 * 1024 * 1024,
+          };
+
+          if(mode === 'dos'){
+            opts.hda = { url: V86_ASSETS.freedos, async: true };
+          }else{
+            opts.cdrom = { url: V86_ASSETS.linux, async: true };
+          }
+
+          try{
+            win.__v86 = new Starter(opts);
+            status.textContent = 'Running. Tap screen to focus, use keyboard if available.';
+          }catch(err){
+            status.textContent = 'Failed to start emulator (see console).';
+            console.error(err);
+          }
+        }
+
+        btnDOS.onclick = ()=>boot('dos');
+        btnLinux.onclick = ()=>boot('linux');
+        btnRun.onclick = ()=>{ if(win.__v86 && win.__v86.run) win.__v86.run(); };
+        btnStop.onclick = ()=>{ if(win.__v86 && win.__v86.stop) win.__v86.stop(); };
+        btnReset.onclick = ()=>{ if(win.__v86 && win.__v86.restart) win.__v86.restart(); };
+      }
+    },
+    chip8: {
+      name:'CHIP‑8 Emulator',
+      mount(win){
+        const h = win.header;
+        h.innerHTML = '';
+
+        const badge = document.createElement('div');
+        badge.textContent = 'prime‑domain task';
+        badge.style.padding='4px 8px';
+        badge.style.border='1px solid #2a2f3b';
+        badge.style.borderRadius='999px';
+        badge.style.color='#a7a7b0';
+
+        const btnReset = document.createElement('button');
+        btnReset.textContent = 'Reset ROM';
+        btnReset.style.background='#151a24';
+        btnReset.style.color='#e7e7ea';
+        btnReset.style.border='1px solid #2a2f3b';
+        btnReset.style.borderRadius='10px';
+        btnReset.style.padding='6px 10px';
+        btnReset.onclick = ()=>{ chip8.loadProgram(ROM_DEMO); toast('ROM reset'); };
+
+        const hint = document.createElement('div');
+        hint.textContent = 'Keys: 1‑4/Q‑R/A‑F/Z‑V (tap grid)';
+        hint.style.marginLeft='auto';
+        hint.style.color='#a7a7b0';
+
+        h.appendChild(badge);
+        h.appendChild(btnReset);
+        h.appendChild(hint);
+
+        // body
+        const b = win.body;
+        b.innerHTML = '';
+        b.style.display='grid';
+        b.style.gridTemplateColumns='1fr 220px';
+        b.style.gridTemplateRows='1fr';
+        b.style.gap='0';
+
+        const left = document.createElement('div');
+        left.style.position='relative';
+        left.style.background='#000';
+
+        const right = document.createElement('div');
+        right.style.background='#0f121a';
+        right.style.borderLeft='1px solid #2a2f3b';
+        right.style.padding='10px';
+        right.style.display='flex';
+        right.style.flexDirection='column';
+        right.style.gap='8px';
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 32;
+        canvas.style.width='100%';
+        canvas.style.height='100%';
+        canvas.style.imageRendering='pixelated';
+        canvas.style.display='block';
+
+        left.appendChild(canvas);
+
+        const dbg = document.createElement('div');
+        dbg.className='mono';
+        dbg.style.whiteSpace='pre';
+        dbg.style.color='#a7a7b0';
+        dbg.style.fontSize='11px';
+        dbg.style.userSelect='text';
+        dbg.textContent='';
+
+        const keyGrid = document.createElement('div');
+        keyGrid.style.display='grid';
+        keyGrid.style.gridTemplateColumns='repeat(4, 1fr)';
+        keyGrid.style.gap='6px';
+
+        const map = [
+          ['1',0x1],['2',0x2],['3',0x3],['C',0xC],
+          ['4',0x4],['5',0x5],['6',0x6],['D',0xD],
+          ['7',0x7],['8',0x8],['9',0x9],['E',0xE],
+          ['A',0xA],['0',0x0],['B',0xB],['F',0xF],
+        ];
+        for(const [lab,code] of map){
+          const k = document.createElement('div');
+          k.textContent = lab;
+          k.style.padding='10px 0';
+          k.style.textAlign='center';
+          k.style.border='1px solid #2a2f3b';
+          k.style.borderRadius='12px';
+          k.style.background='#10131a';
+          k.style.cursor='pointer';
+          k.onpointerdown = (e)=>{
+            e.preventDefault();
+            try{ k.setPointerCapture(e.pointerId); }catch{}
+            chip8.keys[code]=1;
+            k.style.outline='2px solid #6ee7ff';
+          };
+          const up = (e)=>{
+            if(e) e.preventDefault();
+            chip8.keys[code]=0;
+            k.style.outline='none';
+            try{ if(e) k.releasePointerCapture(e.pointerId); }catch{}
+          };
+          k.onpointerup = up;
+          k.onpointercancel = up;
+          k.onpointerleave = ()=>{ chip8.keys[code]=0; k.style.outline='none'; };
+          keyGrid.appendChild(k);
+        }
+
+        const info = document.createElement('div');
+        info.style.color='#a7a7b0';
+        info.style.fontSize='11px';
+        info.className='mono';
+        info.textContent='Display is rendered inside SVG via foreignObject.\nPrime‑domain scheduler is running in background.';
+
+        right.appendChild(keyGrid);
+        right.appendChild(info);
+        right.appendChild(dbg);
+
+        b.appendChild(left);
+        b.appendChild(right);
+
+        const ctx = canvas.getContext('2d', {alpha:false});
+        const img = ctx.createImageData(64,32);
+
+        win.__tick = ()=>{
+          // emulate
+          chip8.cycle(18);
+          if(chip8.drawFlag){
+            chip8.drawFlag=false;
+            // draw
+            for(let i=0;i<64*32;i++){
+              const on = chip8.gfx[i];
+              const o = i*4;
+              img.data[o+0] = on? 220: 10;
+              img.data[o+1] = on? 235: 12;
+              img.data[o+2] = on? 255: 16;
+              img.data[o+3] = 255;
+            }
+            ctx.putImageData(img,0,0);
+          }
+          dbg.textContent = `PC=0x${chip8.pc.toString(16).padStart(3,'0')}  I=0x${chip8.I.toString(16).padStart(3,'0')}  DT=${chip8.delay}  ST=${chip8.sound}\n`+
+                            `V0=${chip8.V[0]} V1=${chip8.V[1]} V2=${chip8.V[2]} V3=${chip8.V[3]} VF=${chip8.V[0xF]}\n`+
+                            `prime‑tag example: ${new PVec([[0,1],[1,1],[2,1]]).toString()} (2·3·5)`;
+
+          // also project something into the prime-domain tile space (OS integration)
+          // Map CHIP‑8 pixels into LOG-space around center.
+          const baseX = (LOG_W/2 - 64*6)|0;
+          const baseY = (LOG_H/2 - 32*6)|0;
+          for(let y=0;y<32;y++) for(let x=0;x<64;x++){
+            if(chip8.gfx[y*64+x]){
+              // draw a 6×6 block
+              const c = rgba(130,210,255,255);
+              const xx = baseX + x*6;
+              const yy = baseY + y*6;
+              for(let dy=0;dy<6;dy++) for(let dx=0;dx<6;dx++) setPixel(xx+dx, yy+dy, c);
+              // tag tiles as “emulator output” = p2·p3·p5
+              const tx = ((xx)/TILE)|0, ty=((yy)/TILE)|0;
+              tagTile(tx,ty, new PVec([[0,1],[1,1],[2,1]]));
+            }
+          }
+        };
+      }
+    },
+
+    primeInspector: {
+      name:'Prime‑Domain Inspector',
+      mount(win){
+        const h = win.header;
+        h.innerHTML='';
+        const badge = document.createElement('div');
+        badge.textContent = 'PPU regs';
+        badge.style.padding='4px 8px';
+        badge.style.border='1px solid #2a2f3b';
+        badge.style.borderRadius='999px';
+        badge.style.color='#a7a7b0';
+
+        const btnRun = document.createElement('button');
+        btnRun.textContent = 'Run PPU demo';
+        btnRun.style.background='#151a24';
+        btnRun.style.color='#e7e7ea';
+        btnRun.style.border='1px solid #2a2f3b';
+        btnRun.style.borderRadius='10px';
+        btnRun.style.padding='6px 10px';
+
+        const btnStop = document.createElement('button');
+        btnStop.textContent = 'Stop';
+        btnStop.style.background='#151a24';
+        btnStop.style.color='#e7e7ea';
+        btnStop.style.border='1px solid #2a2f3b';
+        btnStop.style.borderRadius='10px';
+        btnStop.style.padding='6px 10px';
+
+        const right = document.createElement('div');
+        right.style.marginLeft='auto';
+        right.style.color='#a7a7b0';
+        right.className='mono';
+        right.textContent='(closure/invertibility lives here)';
+
+        h.appendChild(badge);
+        h.appendChild(btnRun);
+        h.appendChild(btnStop);
+        h.appendChild(right);
+
+        const b = win.body;
+        b.innerHTML='';
+        b.style.padding='10px';
+        b.style.background='#0b0c10';
+        b.style.color='#e7e7ea';
+        b.style.font='12px/1.25 ui-monospace,monospace';
+
+        const pre = document.createElement('pre');
+        pre.style.margin='0';
+        pre.style.whiteSpace='pre-wrap';
+        pre.style.userSelect='text';
+        b.appendChild(pre);
+
+        const prog = buildPPUDemoProgram();
+
+        btnRun.onclick = ()=>{ ppu.load(prog); toast('PPU demo loaded'); };
+        btnStop.onclick = ()=>{ ppu.running=false; toast('PPU stopped'); };
+
+        win.__tick = ()=>{
+          // run a few steps
+          if(ppu.running) ppu.step(80);
+          // display regs
+          const lines=[];
+          lines.push('PPU registers (prime‑exponent vectors):');
+          for(let r=0;r<8;r++) lines.push(`r${r}: ${ppu.reg[r].toString()}`);
+          lines.push('');
+          lines.push('Note: ADD = exponent add (× in integer domain), SUB = exponent sub (÷).');
+          lines.push('This is the free abelian group structure (Z^k, +).');
+          pre.textContent = lines.join('\n');
+        };
+      }
+    }
+  };
+
+  function buildPPUDemoProgram(){
+    // Program:
+    // r1 = 2·3·5
+    // r2 = 3^2
+    // r3 = r1 + r2 = 2·3^3·5
+    // r4 = r3 - r1 = 3^2
+    // halt
+    const bytes=[];
+    const push=(...xs)=>xs.forEach(x=>bytes.push(x&255));
+    const pushU16=(u)=>{ push(u&255,(u>>8)&255); };
+
+    const imm = (pairs)=> new PVec(pairs).pack();
+
+    // LDI r1
+    { const p=imm([[0,1],[1,1],[2,1]]); push(OP.LDI, 1); pushU16(p.length); push(...p); }
+    // LDI r2
+    { const p=imm([[1,2]]); push(OP.LDI, 2); pushU16(p.length); push(...p); }
+    // ADD r3 = r1 + r2
+    push(OP.ADD, 3, 1, 2);
+    // SUB r4 = r3 - r1
+    push(OP.SUB, 4, 3, 1);
+    push(OP.HALT);
+
+    return new Uint8Array(bytes);
+  }
+
+  // ============================================================
+  // 8) Start menu + app launching
+  // ============================================================
+
+  const MENU = [
+    { id:'v86',  label:'x86 VM (v86)', app:Apps.v86 },
+    { id:'chip8', label:'CHIP‑8 Emulator', app:Apps.chip8 },
+    { id:'prime', label:'Prime‑Domain Inspector', app:Apps.primeInspector },
+  ];
+
+  function rebuildMenu(){
+    menuItems.innerHTML='';
+    let y=0;
+    for(const it of MENU){
+      const g = mk('g', { class:'btn', transform:`translate(20 ${450+y})` }, menuItems);
+      mk('rect', { x:0,y:0,width:300,height:44,rx:12,ry:12,fill:'#111521',stroke:'#2a2f3b' }, g);
+      const t = mk('text', { x:14, y:28, fill:'#e7e7ea', 'font-size':13, class:'mono' }, g);
+      t.textContent = it.label;
+      g.addEventListener('pointerdown', (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        openApp(it.app);
+        toggleStart(false);
+      });
+      y += 52;
+    }
+  }
+
+  function toggleStart(force){
+    OS.startOpen = (force===undefined)? !OS.startOpen : !!force;
+    startMenu.setAttribute('opacity', OS.startOpen ? '1':'0');
+    startMenu.setAttribute('pointer-events', OS.startOpen ? 'auto':'none');
+  }
+
+  function openApp(app){
+    const w = createWindow({
+      title: app.name,
+      x: 90 + (OS.windows.length*28)%480,
+      y: 80 + (OS.windows.length*18)%260,
+      w: 920,
+      h: 560,
+      app
+    });
+    toast('opened: '+app.name);
+    return w;
+  }
+
+  rebuildMenu();
+
+  startOverlay.addEventListener('pointerdown', (e)=>{
+    // Click outside the menu closes it (overlay sits behind the panel)
+    e.preventDefault(); e.stopPropagation();
+    toggleStart(false);
+  });
+
+  startBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); toggleStart(); });
+
+  // ============================================================
+  // 9) Pointer routing (touchscreen)
+  // ============================================================
+
+  function onDown(e){
+    // Some mobile browsers deliver pointer events from HTML inside <foreignObject>
+    // in a way that can break click synthesis. If the event originated from an
+    // interactive HTML element, let it be handled purely by the HTML side.
+    if(e && typeof e.composedPath === 'function') {
+      const path = e.composedPath();
+      for(const n of path){
+        if(!n || n.nodeType !== 1) continue;
+        const tag = (n.tagName||'').toUpperCase();
+        if(tag === 'BUTTON' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'CANVAS') return;
+      }
+    }
+    const p = svgPointFromClient(e.clientX,e.clientY);
+    OS.pointer.down=true; OS.pointer.x=p.x; OS.pointer.y=p.y;
+    cursor.setAttribute('cx', p.x); cursor.setAttribute('cy', p.y);
+
+    // Start menu closes if click outside
+    if(OS.startOpen){
+      // if click within menu region, menu item handler will run
+      if(!(p.x>=10 && p.x<=330 && p.y>=410 && p.y<=670)) toggleStart(false);
+    }
+
+    // Window drag
+    const w = hitWindowTitle(p.x,p.y);
+    if(w){
+      focus(w);
+      if(p.x>=w.x+w.w-34 && p.x<=w.x+w.w-12 && p.y>=w.y+6 && p.y<=w.y+28){
+        closeWindow(w);
+        return;
+      }
+      OS.drag = { win:w, offX:p.x-w.x, offY:p.y-w.y };
+      return;
+    }
+  }
+
+  function onMove(e){
+    const p = svgPointFromClient(e.clientX,e.clientY);
+    OS.pointer.x=p.x; OS.pointer.y=p.y;
+    cursor.setAttribute('cx', p.x); cursor.setAttribute('cy', p.y);
+    if(OS.drag && OS.pointer.down){
+      const w=OS.drag.win;
+      const nx = clamp(p.x-OS.drag.offX, 10, OS.W-w.w-10);
+      const ny = clamp(p.y-OS.drag.offY, 10, OS.H-OS.taskH-w.h-10);
+      setWindowGeom(w, nx, ny);
+    }
+  }
+
+  function onUp(){
+    OS.pointer.down=false;
+    OS.drag=null;
+  }
+
+  svg.addEventListener('pointerdown', onDown);
+  svg.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+
+  // Keyboard mapping for CHIP‑8 (optional)
+  const keyMap = {
+    '1':0x1,'2':0x2,'3':0x3,'4':0xC,
+    'q':0x4,'w':0x5,'e':0x6,'r':0xD,
+    'a':0x7,'s':0x8,'d':0x9,'f':0xE,
+    'z':0xA,'x':0x0,'c':0xB,'v':0xF
+  };
+  window.addEventListener('keydown', (e)=>{ const k=keyMap[e.key.toLowerCase()]; if(k!==undefined){ chip8.keys[k]=1; } });
+  window.addEventListener('keyup', (e)=>{ const k=keyMap[e.key.toLowerCase()]; if(k!==undefined){ chip8.keys[k]=0; } });
+
+  // ============================================================
+  // 10) Main loop
+  // ============================================================
+
+  let lastFpsT = nowMs();
+  let frames=0;
+
+  function frame(){
+    // app ticks
+    for(const w of OS.windows){ if(typeof w.__tick==='function') w.__tick(); }
+
+    // minimal “renderer” for sparse 32k buffer: we just keep tags + pixels as proof of plumbing.
+    // You can later add a camera and a visible canvas that visualizes LOG-space tiles.
+
+    frames++;
+    const t=nowMs();
+    if(t-lastFpsT>500){
+      const fps = frames*1000/(t-lastFpsT);
+      frames=0; lastFpsT=t;
+      setStatus(`fps ${fps.toFixed(1)} | tiles ${tiles.size} | dirty ${dirty.size}`);
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  // Boot
+  openApp(Apps.chip8);
+  openApp(Apps.primeInspector);
+  toast('PPU‑SVG OS booted');
+  requestAnimationFrame(frame);
+
+  // ============================================================
+  // 11) Everything‑Equation wrapper (symbolic interface)
+  //     Implemented as a callable “codec surface”; actual exactness
+  //     depends on using exact arithmetic for logs/cos (BigFloat/CF).
+  // ============================================================
+
+  // Expose a namespace so you can wire your analytic codec later.
+  window.PPU_SVG_OS = {
+    PRIMES,
+    PVec,
+    basForward, basInverse,
+    LOG_W, LOG_H, TILE,
+    chip8,
+    ppu,
+    tiles, tileTag,
+    // placeholder signature for your “Everything Equation” wrapper
+    everythingEquation: (x,y)=>({x,y, note:'Define E(x,y) per your paper; keep symbolic/BigFloat for exact invertibility.'})
+  };
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>SVG Phone Fix</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0c; }
+    #stage { width: 100vw; height: 100vh; overflow: hidden; display: grid; place-items: center; }
+
+    /* The SVG fills the container */
+    #stage svg { width: 100%; height: 100%; display: block; }
+
+    /* Better mobile tap behavior */
+    #stage { -webkit-tap-highlight-color: transparent; user-select: none; touch-action: manipulation; }
+
+    /* Optional: keep text crisp */
+    svg { shape-rendering: geometricPrecision; text-rendering: geometricPrecision; }
+
+    /* Buttons */
+    .btn { cursor: pointer; }
+    .btn, .btn * { pointer-events: all; }
+    .hit { pointer-events: all; }
+    .no-pointer { pointer-events: none !important; } /* Put this on overlays that steal taps */
+
+    /* Visual pressed feedback (optional) */
+    .pressed { filter: brightness(1.15); }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <!--
+      ✅ PASTE YOUR SVG HERE (INLINE), keeping the <svg ...> root element.
+
+      Critical:
+        - Keep a viewBox="minX minY width height"
+        - Remove fixed width/height attrs (or let JS remove them)
+        - Put class="btn" + data-action="..." on clickable groups/elements
+    -->
+
+    <svg id="ui" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="SVG UI" role="img">
+      <!-- Background -->
+      <rect x="0" y="0" width="1200" height="800" fill="#111217"/>
+
+      <!-- Example overlay that should NOT capture taps -->
+      <rect class="no-pointer" x="0" y="0" width="1200" height="140" fill="#000" opacity="0.35"/>
+
+      <!-- Example button group -->
+      <g class="btn" data-action="play" role="button" tabindex="0" aria-label="Play">
+        <!-- Art -->
+        <rect x="80" y="220" width="360" height="120" rx="26" fill="#22242c" stroke="#4b4f5c" stroke-width="4"/>
+        <text x="260" y="295" text-anchor="middle" fill="#ffffff" font-size="42" font-family="system-ui, -apple-system, Segoe UI, Roboto">PLAY</text>
+        <!-- NOTE: hitbox auto-added by JS based on bbox -->
+      </g>
+
+      <g class="btn" data-action="settings" role="button" tabindex="0" aria-label="Settings">
+        <rect x="80" y="380" width="360" height="120" rx="26" fill="#22242c" stroke="#4b4f5c" stroke-width="4"/>
+        <text x="260" y="455" text-anchor="middle" fill="#ffffff" font-size="42" font-family="system-ui, -apple-system, Segoe UI, Roboto">SETTINGS</text>
+      </g>
+
+      <!-- Debug text -->
+      <text id="status" x="80" y="700" fill="#cfd3df" font-size="26" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas">Ready.</text>
+    </svg>
+  </div>
+
+  <script>
+/* SVG Phone Fix
+   - Makes inline SVG responsive (removes fixed width/height)
+   - Fixes unresponsive "buttons" by adding an invisible hitbox rect per .btn / [data-action]
+   - Uses Pointer Events for touch+mouse
+*/
+(function () {
+  function qs(sel, root=document) { return root.querySelector(sel); }
+  function qsa(sel, root=document) { return Array.from(root.querySelectorAll(sel)); }
+
+  const stage = qs("#stage");
+  if (!stage) return;
+
+  const svg = stage.querySelector("svg");
+  if (!svg) {
+    console.warn("No inline <svg> found. Paste your SVG inline into index.html.");
+    return;
+  }
+
+  // Ensure responsive sizing
+  svg.removeAttribute("width");
+  svg.removeAttribute("height");
+  svg.style.width = "100%";
+  svg.style.height = "100%";
+  svg.style.display = "block";
+
+  // If viewBox is missing, try to infer it from width/height (best-effort).
+  if (!svg.getAttribute("viewBox")) {
+    const w = Number(svg.getAttribute("width")) || 1200;
+    const h = Number(svg.getAttribute("height")) || 800;
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    console.warn("SVG had no viewBox. Added a fallback viewBox. Better: set it properly in the SVG.");
+  }
+
+  // Helper: screen -> SVG coordinates (useful if you do drags)
+  function toSvgPoint(clientX, clientY) {
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const pt = new DOMPoint(clientX, clientY);
+    const inv = ctm.inverse();
+    const p = pt.matrixTransform(inv);
+    return { x: p.x, y: p.y };
+  }
+
+  // Auto-add hitbox rect for each clickable target
+  function ensureHitbox(target, pad=12) {
+    // If there's already a .hit child, don't duplicate
+    if (target.querySelector && target.querySelector(":scope > .hit")) return;
+
+    // getBBox can throw if element not rendered yet; guard it
+    let bb;
+    try {
+      bb = target.getBBox();
+    } catch (e) {
+      return;
+    }
+
+    // If bbox is tiny, still add a minimum size hitbox
+    const minW = 44, minH = 44; // typical touch target size
+    const w = Math.max(bb.width + pad * 2, minW);
+    const h = Math.max(bb.height + pad * 2, minH);
+    const x = bb.x - pad - (w - (bb.width + pad * 2)) / 2;
+    const y = bb.y - pad - (h - (bb.height + pad * 2)) / 2;
+
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("class", "hit");
+    rect.setAttribute("x", String(x));
+    rect.setAttribute("y", String(y));
+    rect.setAttribute("width", String(w));
+    rect.setAttribute("height", String(h));
+    rect.setAttribute("fill", "transparent");
+    rect.setAttribute("pointer-events", "all");
+
+    // Put hitbox first so it doesn't cover visuals (it’s transparent anyway)
+    target.insertBefore(rect, target.firstChild);
+  }
+
+  const status = qs("#status", svg);
+
+  function setStatus(msg) {
+    if (status) status.textContent = msg;
+  }
+
+  // Wire up all clickable elements
+  const buttons = qsa(".btn, [data-action]", svg);
+
+  // Build hitboxes
+  buttons.forEach(btn => ensureHitbox(btn, 14));
+
+  // If layout changes (orientation), bbox changes. Rebuild hitboxes on resize.
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      qsa(".hit", svg).forEach(h => h.remove());
+      buttons.forEach(btn => ensureHitbox(btn, 14));
+      setStatus("Resized: hitboxes rebuilt.");
+    }, 120);
+  });
+
+  function onPress(btn, e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (btn.setPointerCapture && e.pointerId != null) {
+      try { btn.setPointerCapture(e.pointerId); } catch {}
+    }
+    btn.classList.add("pressed");
+
+    const action = btn.dataset.action || btn.getAttribute("data-action") || "unknown";
+    const p = toSvgPoint(e.clientX, e.clientY);
+    setStatus(`Pressed: ${action} @ (${p.x.toFixed(1)}, ${p.y.toFixed(1)})`);
+
+    // TODO: route actions here. Example:
+    // if (action === "play") startGame();
+  }
+
+  function onRelease(btn) {
+    btn.classList.remove("pressed");
+  }
+
+  buttons.forEach(btn => {
+    btn.addEventListener("pointerdown", (e) => onPress(btn, e), { passive: false });
+    btn.addEventListener("pointerup", () => onRelease(btn), { passive: true });
+    btn.addEventListener("pointercancel", () => onRelease(btn), { passive: true });
+    btn.addEventListener("pointerleave", () => onRelease(btn), { passive: true });
+
+    // Keyboard activation (nice-to-have)
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        const action = btn.dataset.action || "unknown";
+        setStatus(`Activated (kbd): ${action}`);
+      }
+    });
+  });
+
+  // Debug: detect a common cause — overlay stealing events
+  // If you have a full-screen rect/overlay, put class="no-pointer" on it.
+  setStatus(`Ready. Wired ${buttons.length} button(s).`);
+})();
+
+</script>
+</body>
+</html>
